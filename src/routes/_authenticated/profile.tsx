@@ -13,8 +13,7 @@ function Profile() {
         </div>
         <h1 className="font-display text-3xl font-bold mt-4">Seu perfil</h1>
         <p className="text-muted-foreground mt-2 max-w-2xl">
-          Preferências, idioma, notificações e sons continuarão sendo configurados em Ajustes até a
-          página completa de perfil ser liberada.
+          Gerencie suas informações de conta em Configurações. Preferências, notificações e sons ficam centralizados lá.
         </p>
         <Link to="/settings" className="inline-block mt-6">
           <Button variant="outline">Abrir ajustes</Button>

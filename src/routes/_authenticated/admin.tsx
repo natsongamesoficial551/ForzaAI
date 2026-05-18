@@ -43,7 +43,7 @@ function Admin() {
         <h1 className="font-display text-2xl font-bold mt-4">Acesso restrito</h1>
         <p className="text-muted-foreground mt-2">Este painel é apenas para administradores.</p>
         <Link to="/dashboard" className="inline-block mt-6 text-primary underline">
-          Voltar ao Dashboard
+          Voltar ao Painel
         </Link>
       </div>
     );

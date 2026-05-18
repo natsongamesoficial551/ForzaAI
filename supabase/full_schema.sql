@@ -131,7 +131,24 @@ $$;
 
 drop policy if exists "users own projects" on public.projects;
 create policy "users own projects" on public.projects
-  for all using (public.can_access_project(id, auth.uid())) with check (auth.uid() = user_id);
+  for select using (
+    auth.uid() = user_id
+    or exists (
+      select 1 from public.project_collaborators pc
+      where pc.project_id = id and pc.user_id = auth.uid()
+    )
+  );
+
+create policy "users insert own projects" on public.projects
+  for insert with check (auth.uid() = user_id);
+
+create policy "project owners and editors update projects" on public.projects
+  for update
+  using (public.can_edit_project(id, auth.uid()))
+  with check (auth.uid() = user_id or public.can_edit_project(id, auth.uid()));
+
+create policy "project owners delete projects" on public.projects
+  for delete using (auth.uid() = user_id);
 
 drop trigger if exists set_updated_at on public.projects;
 create trigger set_updated_at

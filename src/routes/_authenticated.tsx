@@ -74,7 +74,7 @@ function AuthLayout() {
   };
 
   const nav = [
-    { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
+    { to: "/dashboard", icon: LayoutDashboard, label: "Painel" },
     { to: "/projects", icon: FolderKanban, label: "Projetos" },
     { to: "/billing", icon: CreditCard, label: "Créditos" },
     { to: "/subscriptions", icon: Crown, label: "Assinaturas" },
@@ -102,7 +102,7 @@ function AuthLayout() {
           </div>
           <div className="min-w-0">
             <span className="font-display font-bold leading-none">ForzaAI</span>
-            <div className="text-[10px] text-muted-foreground leading-none mt-1">SaaS Studio</div>
+            <div className="text-[10px] text-muted-foreground leading-none mt-1">Estúdio SaaS</div>
           </div>
         </Link>
 

@@ -27,7 +27,7 @@ function CheckoutReturn() {
           )}
         </div>
         <Button asChild className="w-full bg-gradient-primary">
-          <Link to="/dashboard">Voltar ao Dashboard</Link>
+          <Link to="/dashboard">Voltar ao Painel</Link>
         </Button>
       </div>
     </div>

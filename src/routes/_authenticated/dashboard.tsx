@@ -4,26 +4,14 @@ import { useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
-  DialogTrigger,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Plus,
   Sparkles,
   Globe,
   Trash2,
@@ -38,24 +26,10 @@ import { deleteProject, deleteEmptyDrafts } from "@/lib/projects.functions";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({ component: Dashboard });
 
-const SITE_TYPES = [
-  { value: "landing-page", label: "Landing Page" },
-  { value: "institutional", label: "Site Institucional" },
-  { value: "portfolio", label: "Portfolio" },
-  { value: "ecommerce", label: "E-commerce" },
-  { value: "blog", label: "Blog" },
-  { value: "restaurant", label: "Restaurante" },
-  { value: "clinic", label: "Clínica / Saúde" },
-  { value: "saas", label: "SaaS" },
-];
-
 function Dashboard() {
   const router = useRouter();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [siteType, setSiteType] = useState("landing-page");
-  const [creating, setCreating] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
   const [prompt, setPrompt] = useState("");
   const [launching, setLaunching] = useState(false);
@@ -93,28 +67,6 @@ function Dashboard() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const handleCreate = async () => {
-    if (!name.trim()) return toast.error("Dê um nome ao projeto");
-    setCreating(true);
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const { data, error } = await supabase
-      .from("projects")
-      .insert({ name: name.trim(), site_type: siteType, user_id: user!.id })
-      .select()
-      .single();
-    setCreating(false);
-    if (error || !data) {
-      toast.error("Não consegui criar o projeto");
-      return;
-    }
-    qc.invalidateQueries({ queryKey: ["projects"] });
-    setOpen(false);
-    setName("");
-    router.navigate({ to: "/projects/$projectId", params: { projectId: data.id } });
-  };
-
   const handleLaunchFromPrompt = async () => {
     const p = prompt.trim();
     if (p.length < 6) return toast.error("Descreva o site que você quer criar.");
@@ -130,7 +82,7 @@ function Dashboard() {
       .single();
     if (error || !data) {
       setLaunching(false);
-      toast.error("Não consegui criar o projeto");
+      toast.error(error?.message ?? "Não consegui criar o projeto");
       return;
     }
     try {
@@ -153,53 +105,22 @@ function Dashboard() {
             Descreva a ideia, responda o wizard e deixe a IA montar a primeira versão.
           </p>
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button className="bg-gradient-primary shadow-glow">
-              <Plus className="size-4" /> Novo projeto
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Novo projeto</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 py-2">
-              <div>
-                <Label>Nome do projeto</Label>
-                <Input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Ex: Pizzaria Bella"
-                  className="mt-1.5"
-                />
-              </div>
-              <div>
-                <Label>Tipo de site</Label>
-                <Select value={siteType} onValueChange={setSiteType}>
-                  <SelectTrigger className="mt-1.5">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {SITE_TYPES.map((t) => (
-                      <SelectItem key={t.value} value={t.value}>
-                        {t.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setOpen(false)}>
-                Cancelar
-              </Button>
-              <Button onClick={handleCreate} disabled={creating} className="bg-gradient-primary">
-                {creating ? "Criando…" : "Criar e abrir"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <Button className="bg-gradient-primary shadow-glow" onClick={() => setOpen(true)}>
+          Criar pelo chat
+        </Button>
       </div>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Crie pelo chat</DialogTitle>
+            <DialogDescription>
+              Escreva o que quer construir no campo principal do Dashboard. O ForzaAI fará perguntas obrigatórias antes de gerar.
+            </DialogDescription>
+          </DialogHeader>
+          <Button onClick={() => setOpen(false)}>Entendi</Button>
+        </DialogContent>
+      </Dialog>
 
       <div className="mt-8 rounded-[2rem] border border-border bg-gradient-to-br from-card via-card to-primary/5 p-5 md:p-8 shadow-elegant">
         <div className="mx-auto max-w-4xl text-center">
