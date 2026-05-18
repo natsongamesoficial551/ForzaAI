@@ -37,8 +37,9 @@ function Dashboard() {
   const deleteFn = useServerFn(deleteProject);
   const cleanupFn = useServerFn(deleteEmptyDrafts);
 
-  const { data: projects, isLoading } = useQuery({
+  const { data: projects, isLoading, error: projectsError } = useQuery({
     queryKey: ["projects"],
+    retry: false,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("projects")
@@ -200,7 +201,11 @@ function Dashboard() {
             <p className="text-sm text-muted-foreground">Continue editando ou publique seus sites.</p>
           </div>
         </div>
-        {isLoading ? (
+        {projectsError ? (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+            Não foi possível carregar projetos recentes. Rode o SQL atualizado para corrigir as regras do banco.
+          </div>
+        ) : isLoading ? (
           <div className="grid md:grid-cols-3 gap-4">
             {[1, 2, 3].map((i) => (
               <div key={i} className="h-40 rounded-xl border border-border bg-card animate-pulse" />
@@ -269,7 +274,7 @@ function Dashboard() {
             </div>
             <h3 className="font-display text-xl font-semibold mt-4">Nenhum projeto ainda</h3>
             <p className="text-sm text-muted-foreground mt-1">
-              Clique em "Novo projeto" para começar.
+              Crie o primeiro projeto usando o chat do Painel.
             </p>
           </div>
         )}

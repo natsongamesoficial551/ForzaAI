@@ -9,6 +9,7 @@ export const Route = createFileRoute("/_authenticated/projects/")({ component: P
 function Projects() {
   const { data: projects, isLoading, error } = useQuery({
     queryKey: ["projects"],
+    retry: false,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("projects")
@@ -35,12 +36,12 @@ function Projects() {
 
       {error && (
         <div className="mt-6 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
-          Não foi possível carregar os projetos. Atualize o SQL do banco e tente novamente.
+          Não foi possível carregar os projetos por uma regra do banco. Rode o SQL atualizado e recarregue a página.
         </div>
       )}
 
       <div className="mt-8">
-        {isLoading ? (
+        {error ? null : isLoading ? (
           <div className="grid md:grid-cols-3 gap-4">
             {[1, 2, 3].map((item) => (
               <div key={item} className="h-40 rounded-xl border border-border bg-card animate-pulse" />
