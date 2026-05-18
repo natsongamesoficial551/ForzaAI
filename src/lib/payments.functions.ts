@@ -5,6 +5,12 @@ import { type StripeEnv, createStripeClient } from "@/lib/stripe.server";
 
 const envSchema = z.enum(["sandbox", "live"]);
 
+const CREDIT_PACKAGES: Record<string, { credits: number; amount: number; name: string }> = {
+  credits_50: { credits: 50, amount: 5000, name: "50 créditos" },
+  credits_100: { credits: 100, amount: 8500, name: "100 créditos" },
+  credits_300: { credits: 300, amount: 30000, name: "300 créditos" },
+};
+
 async function resolveOrCreateCustomer(
   stripe: ReturnType<typeof createStripeClient>,
   options: { email?: string; userId?: string },
@@ -86,6 +92,53 @@ export const createCheckoutSession = createServerFn({ method: "POST" })
         ...(isRecurring && { subscription_data: { metadata: { userId: data.userId } } }),
       }),
     });
+    return session.client_secret;
+  });
+
+export const createCreditCheckoutSession = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { packageId: string; returnUrl: string; environment: StripeEnv }) =>
+    z
+      .object({
+        packageId: z.enum(["credits_50", "credits_100", "credits_300"]),
+        returnUrl: z.string().url(),
+        environment: envSchema,
+      })
+      .parse(data),
+  )
+  .handler(async ({ data, context }) => {
+    const { userId, claims } = context;
+    const pack = CREDIT_PACKAGES[data.packageId];
+    const stripe = createStripeClient(data.environment);
+    const customerId = await resolveOrCreateCustomer(stripe, {
+      email: typeof claims.email === "string" ? claims.email : undefined,
+      userId,
+    });
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      ui_mode: "embedded_page",
+      customer: customerId,
+      return_url: data.returnUrl,
+      payment_method_types: ["card", "pix"],
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: "brl",
+            unit_amount: pack.amount,
+            product_data: { name: `ForzaAI — ${pack.name}` },
+          },
+        },
+      ],
+      metadata: {
+        userId,
+        packageId: data.packageId,
+        credits: String(pack.credits),
+        type: "credit_package",
+      },
+    });
+
     return session.client_secret;
   });
 

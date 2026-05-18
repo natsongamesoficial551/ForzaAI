@@ -1,29 +1,48 @@
 import { EmbeddedCheckoutProvider, EmbeddedCheckout } from "@stripe/react-stripe-js";
 import { useCallback } from "react";
 import { getStripe, getStripeEnvironment } from "@/lib/stripe";
-import { createCheckoutSession } from "@/lib/payments.functions";
+import { createCheckoutSession, createCreditCheckoutSession } from "@/lib/payments.functions";
 
-interface Props {
-  priceId: string;
+type Props = {
+  priceId?: string;
+  packageId?: string;
   customerEmail?: string;
   userId?: string;
   returnUrl?: string;
-}
+  mode?: "subscription" | "credits";
+};
 
-export function StripeEmbeddedCheckout({ priceId, customerEmail, userId, returnUrl }: Props) {
+export function StripeEmbeddedCheckout({
+  priceId,
+  packageId,
+  customerEmail,
+  userId,
+  returnUrl,
+  mode = "subscription",
+}: Props) {
   const fetchClientSecret = useCallback(async (): Promise<string> => {
-    const secret = await createCheckoutSession({
-      data: {
-        priceId,
-        customerEmail,
-        userId,
-        returnUrl: returnUrl || window.location.href,
-        environment: getStripeEnvironment(),
-      },
-    });
+    const targetReturnUrl = returnUrl || window.location.href;
+    const secret =
+      mode === "credits"
+        ? await createCreditCheckoutSession({
+            data: {
+              packageId: packageId!,
+              returnUrl: targetReturnUrl,
+              environment: getStripeEnvironment(),
+            },
+          })
+        : await createCheckoutSession({
+            data: {
+              priceId: priceId!,
+              customerEmail,
+              userId,
+              returnUrl: targetReturnUrl,
+              environment: getStripeEnvironment(),
+            },
+          });
     if (!secret) throw new Error("No client secret returned");
     return secret;
-  }, [priceId, customerEmail, userId, returnUrl]);
+  }, [priceId, packageId, customerEmail, userId, returnUrl, mode]);
 
   return (
     <div id="checkout">

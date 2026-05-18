@@ -16,6 +16,19 @@ function planFromPriceId(priceId: string): string {
   return "free";
 }
 
+async function handleCheckoutCompleted(session: any) {
+  if (session.metadata?.type !== "credit_package") return;
+  const userId = session.metadata?.userId;
+  const credits = Number(session.metadata?.credits ?? 0);
+  if (!userId || !Number.isFinite(credits) || credits <= 0) return;
+
+  await getSupabase().rpc("add_purchased_credits", {
+    _user_id: userId,
+    _amount: credits,
+    _description: `Compra de ${credits} créditos via Stripe`,
+  });
+}
+
 async function handleSubscriptionCreated(subscription: any, env: StripeEnv) {
   const userId = subscription.metadata?.userId;
   if (!userId) {
@@ -107,6 +120,9 @@ export const Route = createFileRoute("/api/public/payments/webhook")({
         try {
           const event = await verifyWebhook(request, env);
           switch (event.type) {
+            case "checkout.session.completed":
+              await handleCheckoutCompleted(event.data.object);
+              break;
             case "customer.subscription.created":
               await handleSubscriptionCreated(event.data.object, env);
               break;

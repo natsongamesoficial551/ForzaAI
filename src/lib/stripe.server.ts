@@ -1,15 +1,12 @@
 import Stripe from "stripe";
-
-const getEnv = (key: string): string => {
-  const value = process.env[key];
-  if (!value) throw new Error(`${key} is not configured`);
-  return value;
-};
+import { getServerEnv } from "./server-env";
 
 export type StripeEnv = "sandbox" | "live";
 
 export function getConnectionApiKey(env: StripeEnv): string {
-  return env === "sandbox" ? getEnv("STRIPE_SANDBOX_API_KEY") : getEnv("STRIPE_LIVE_API_KEY");
+  return env === "sandbox"
+    ? getServerEnv("STRIPE_SANDBOX_API_KEY")
+    : getServerEnv("STRIPE_LIVE_API_KEY");
 }
 
 export function createStripeClient(env: StripeEnv): Stripe {
@@ -26,8 +23,8 @@ export async function verifyWebhook(
   const body = await req.text();
   const secret =
     env === "sandbox"
-      ? getEnv("PAYMENTS_SANDBOX_WEBHOOK_SECRET")
-      : getEnv("PAYMENTS_LIVE_WEBHOOK_SECRET");
+      ? getServerEnv("PAYMENTS_SANDBOX_WEBHOOK_SECRET")
+      : getServerEnv("PAYMENTS_LIVE_WEBHOOK_SECRET");
 
   if (!signature || !body) throw new Error("Missing signature or body");
 

@@ -3,8 +3,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { sendChatMessage } from "@/lib/chat.functions";
+import { generateProjectWizard, sendChatMessage } from "@/lib/chat.functions";
 import { publishProject } from "@/lib/projects.functions";
+import {
+  inviteProjectCollaborator,
+  listProjectCollaborators,
+  removeProjectCollaborator,
+} from "@/lib/collaboration.functions";
+import { listSkills, toggleProjectSkill } from "@/lib/skills.functions";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -32,13 +38,23 @@ import {
   Globe,
   Copy,
   Rocket,
+  CheckCircle2,
+  Users,
+  X,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { notifyGenerationComplete, playInterfaceSound } from "@/lib/client-feedback";
 import Editor from "@monaco-editor/react";
 
 export const Route = createFileRoute("/_authenticated/projects/$projectId")({
   component: Workspace,
 });
+
+type WizardQuestion = {
+  id: string;
+  question: string;
+  options: string[];
+};
 
 function Workspace() {
   const { projectId } = Route.useParams();
@@ -48,9 +64,22 @@ function Workspace() {
   const [streaming, setStreaming] = useState<{ status: string; chars: number } | null>(null);
   const [previewKey, setPreviewKey] = useState(0);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [collabOpen, setCollabOpen] = useState(false);
+  const [collabEmail, setCollabEmail] = useState("");
+  const [collabRole, setCollabRole] = useState<"viewer" | "editor">("editor");
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [wizardPrompt, setWizardPrompt] = useState("");
+  const [wizardQuestions, setWizardQuestions] = useState<WizardQuestion[]>([]);
+  const [wizardAnswers, setWizardAnswers] = useState<Record<string, string>>({});
   const qc = useQueryClient();
+  const wizardFn = useServerFn(generateProjectWizard);
   const sendFn = useServerFn(sendChatMessage);
   const publishFn = useServerFn(publishProject);
+  const listCollaboratorsFn = useServerFn(listProjectCollaborators);
+  const inviteCollaboratorFn = useServerFn(inviteProjectCollaborator);
+  const removeCollaboratorFn = useServerFn(removeProjectCollaborator);
+  const listSkillsFn = useServerFn(listSkills);
+  const toggleProjectSkillFn = useServerFn(toggleProjectSkill);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const { data: project } = useQuery({
@@ -73,6 +102,14 @@ function Workspace() {
     },
   });
 
+  const { data: profile } = useQuery({
+    queryKey: ["profile"],
+    queryFn: async () => {
+      const { data } = await supabase.from("profiles").select("sound_enabled").single();
+      return data;
+    },
+  });
+
   const { data: messages } = useQuery({
     queryKey: ["messages", projectId],
     queryFn: async () => {
@@ -91,6 +128,42 @@ function Workspace() {
         .order("created_at");
       return data ?? [];
     },
+  });
+
+  const { data: collaborators } = useQuery({
+    queryKey: ["collaborators", projectId],
+    queryFn: () => listCollaboratorsFn({ data: { projectId } }),
+  });
+
+  const { data: skills } = useQuery({
+    queryKey: ["skills"],
+    queryFn: () => listSkillsFn(),
+  });
+
+  const { data: activeSkills } = useQuery({
+    queryKey: ["project-skills", projectId],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("project_skill_activations")
+        .select("skill_id")
+        .eq("project_id", projectId);
+      return new Set((data ?? []).map((item) => item.skill_id));
+    },
+  });
+
+  const wizardMutation = useMutation({
+    mutationFn: async (prompt: string) => wizardFn({ data: { projectId, prompt } }),
+    onSuccess: (wizard, prompt) => {
+      if (!wizard.shouldAsk || wizard.questions.length === 0) {
+        sendMutation.mutate(prompt);
+        return;
+      }
+      setWizardPrompt(prompt);
+      setWizardQuestions(wizard.questions);
+      setWizardAnswers({});
+      toast.info("Responda o wizard para melhorar a geração.");
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const sendMutation = useMutation({
@@ -115,7 +188,10 @@ function Workspace() {
       qc.invalidateQueries({ queryKey: ["files", projectId] });
       qc.invalidateQueries({ queryKey: ["profile"] });
       setPreviewKey((k) => k + 1);
-      if (res.filesUpdated > 0) toast.success(`${res.filesUpdated} arquivo(s) atualizado(s)`);
+      if (res.filesUpdated > 0) {
+        toast.success(`${res.filesUpdated} arquivo(s) atualizado(s)`);
+        notifyGenerationComplete(profile?.sound_enabled ?? true);
+      }
     },
     onError: (e: Error) => {
       setStreaming(null);
@@ -134,6 +210,34 @@ function Workspace() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const inviteMutation = useMutation({
+    mutationFn: async () =>
+      inviteCollaboratorFn({ data: { projectId, email: collabEmail, role: collabRole } }),
+    onSuccess: () => {
+      setCollabEmail("");
+      qc.invalidateQueries({ queryKey: ["collaborators", projectId] });
+      toast.success("Colaborador adicionado");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const removeCollaboratorMutation = useMutation({
+    mutationFn: async (collaboratorId: string) =>
+      removeCollaboratorFn({ data: { projectId, collaboratorId } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["collaborators", projectId] });
+      toast.success("Colaborador removido");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const toggleSkillMutation = useMutation({
+    mutationFn: async ({ skillId, active }: { skillId: string; active: boolean }) =>
+      toggleProjectSkillFn({ data: { projectId, skillId, active } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project-skills", projectId] }),
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, streaming]);
@@ -143,19 +247,41 @@ function Workspace() {
     try {
       const key = `initial-prompt:${projectId}`;
       const p = sessionStorage.getItem(key);
-      if (p && !sendMutation.isPending) {
+      if (p && !sendMutation.isPending && !wizardMutation.isPending) {
         sessionStorage.removeItem(key);
-        sendMutation.mutate(p);
+        wizardMutation.mutate(p);
       }
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
+  const hasFiles = (files?.length ?? 0) > 0;
+
   const handleSend = () => {
     const text = input.trim();
-    if (!text || sendMutation.isPending) return;
+    if (!text || sendMutation.isPending || wizardMutation.isPending) return;
+    playInterfaceSound("click", profile?.sound_enabled ?? true);
     setInput("");
+    if (!hasFiles && (!messages || messages.length === 0)) {
+      wizardMutation.mutate(text);
+      return;
+    }
     sendMutation.mutate(text);
+  };
+
+  const handleWizardSubmit = () => {
+    if (wizardQuestions.some((question) => !wizardAnswers[question.id])) {
+      toast.error("Responda todas as perguntas obrigatórias.");
+      return;
+    }
+
+    const context = wizardQuestions
+      .map((question, index) => `${index + 1}. ${question.question}\nResposta: ${wizardAnswers[question.id]}`)
+      .join("\n\n");
+
+    setWizardQuestions([]);
+    setWizardAnswers({});
+    sendMutation.mutate(`${wizardPrompt}\n\nContexto obrigatório respondido pelo cliente:\n${context}`);
   };
 
   const currentFile = files?.find((f) => f.path === activeFile) ?? files?.[0];
@@ -180,7 +306,6 @@ function Workspace() {
   const publicUrl = project?.slug
     ? `${typeof window !== "undefined" ? window.location.origin : ""}/s/${project.slug}`
     : null;
-  const hasFiles = (files?.length ?? 0) > 0;
 
   return (
     <div className="h-screen flex flex-col">
@@ -210,6 +335,12 @@ function Workspace() {
             </a>
           </Button>
         )}
+        <Button size="sm" variant="outline" onClick={() => setSkillsOpen(true)}>
+          <Sparkles className="size-3.5" /> Skills
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => setCollabOpen(true)}>
+          <Users className="size-3.5" /> Colaborar
+        </Button>
         <Button
           size="sm"
           className="bg-gradient-primary"
@@ -267,6 +398,53 @@ function Workspace() {
                 </div>
               )}
             </div>
+            {wizardQuestions.length > 0 && (
+              <div className="border-t border-border bg-background/60 p-3 space-y-3 max-h-[45vh] overflow-auto">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <CheckCircle2 className="size-4 text-primary" /> Perguntas obrigatórias
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Responda para o ForzaAI gerar com mais precisão e menos alucinações.
+                  </p>
+                </div>
+                {wizardQuestions.map((question, index) => (
+                  <div key={question.id} className="rounded-xl border border-border bg-card p-3">
+                    <div className="text-sm font-medium">
+                      {index + 1}. {question.question}
+                    </div>
+                    <div className="mt-2 grid gap-2">
+                      {question.options.map((option) => {
+                        const selected = wizardAnswers[question.id] === option;
+                        return (
+                          <button
+                            key={option}
+                            type="button"
+                            onClick={() =>
+                              setWizardAnswers((current) => ({ ...current, [question.id]: option }))
+                            }
+                            className={`rounded-lg border px-3 py-2 text-left text-xs transition ${
+                              selected
+                                ? "border-primary bg-primary/10 text-foreground"
+                                : "border-border hover:border-primary/50 text-muted-foreground"
+                            }`}
+                          >
+                            {option}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                <Button
+                  className="w-full bg-gradient-primary shadow-glow"
+                  onClick={handleWizardSubmit}
+                  disabled={sendMutation.isPending}
+                >
+                  Continuar geração com minhas respostas
+                </Button>
+              </div>
+            )}
             <div className="p-3 border-t border-border">
               <div className="relative">
                 <Textarea
@@ -278,15 +456,24 @@ function Workspace() {
                       handleSend();
                     }
                   }}
-                  placeholder="Descreva o que você quer no site…"
+                  placeholder={
+                    wizardQuestions.length > 0
+                      ? "Responda o wizard obrigatório acima para continuar…"
+                      : "Descreva o que você quer no site…"
+                  }
                   className="resize-none min-h-[80px] pr-12"
-                  disabled={sendMutation.isPending}
+                  disabled={sendMutation.isPending || wizardMutation.isPending || wizardQuestions.length > 0}
                 />
                 <Button
                   size="icon"
                   className="absolute right-2 bottom-2 size-8 bg-gradient-primary"
                   onClick={handleSend}
-                  disabled={sendMutation.isPending || !input.trim()}
+                  disabled={
+                    sendMutation.isPending ||
+                    wizardMutation.isPending ||
+                    wizardQuestions.length > 0 ||
+                    !input.trim()
+                  }
                 >
                   {sendMutation.isPending ? (
                     <Loader2 className="size-3.5 animate-spin" />
@@ -431,6 +618,103 @@ function Workspace() {
           </Tabs>
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      <Dialog open={collabOpen} onOpenChange={setCollabOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Compartilhar projeto</DialogTitle>
+            <DialogDescription>
+              Colaboradores usam o projeto, mas os créditos debitados são sempre do dono.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <Input
+                value={collabEmail}
+                onChange={(e) => setCollabEmail(e.target.value)}
+                placeholder="email@cliente.com"
+              />
+              <select
+                value={collabRole}
+                onChange={(e) => setCollabRole(e.target.value as "viewer" | "editor")}
+                className="rounded-md border border-border bg-background px-3 text-sm"
+              >
+                <option value="editor">Editor</option>
+                <option value="viewer">Visualizador</option>
+              </select>
+              <Button
+                onClick={() => inviteMutation.mutate()}
+                disabled={inviteMutation.isPending || !collabEmail.trim()}
+              >
+                {inviteMutation.isPending && <Loader2 className="size-4 animate-spin" />}
+                Adicionar
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {(collaborators ?? []).map((collab: any) => (
+                <div key={collab.id} className="flex items-center justify-between rounded-lg border border-border p-3">
+                  <div>
+                    <div className="text-sm font-medium">
+                      {collab.profiles?.full_name || collab.profiles?.email || "Usuário"}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {collab.profiles?.email} · {collab.role === "editor" ? "Editor" : "Visualizador"}
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => removeCollaboratorMutation.mutate(collab.id)}
+                    disabled={removeCollaboratorMutation.isPending}
+                  >
+                    <X className="size-4" />
+                  </Button>
+                </div>
+              ))}
+              {(!collaborators || collaborators.length === 0) && (
+                <div className="text-sm text-muted-foreground">Nenhum colaborador ainda.</div>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={skillsOpen} onOpenChange={setSkillsOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Skills do projeto</DialogTitle>
+            <DialogDescription>
+              Ative comportamentos que serão injetados no prompt da IA deste projeto.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            {(skills ?? []).map((skill: any) => {
+              const enabled = activeSkills?.has(skill.id) ?? false;
+              return (
+                <div key={skill.id} className="rounded-xl border border-border p-4 bg-card">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-medium flex items-center gap-2">
+                        {skill.name}
+                        {skill.is_global && <span className="text-[10px] uppercase text-primary">Global</span>}
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-1">{skill.description}</p>
+                    </div>
+                    <Button
+                      variant={enabled ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => toggleSkillMutation.mutate({ skillId: skill.id, active: !enabled })}
+                      disabled={toggleSkillMutation.isPending || !skill.is_active}
+                    >
+                      {enabled ? "Ativa" : "Ativar"}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
         <DialogContent>

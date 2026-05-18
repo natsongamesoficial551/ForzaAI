@@ -16,6 +16,9 @@ import {
   LogOut,
   Zap,
   Crown,
+  Globe2,
+  Plug,
+  UserRound,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery } from "@tanstack/react-query";
@@ -74,7 +77,11 @@ function AuthLayout() {
     { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
     { to: "/projects", icon: FolderKanban, label: "Projetos" },
     { to: "/billing", icon: CreditCard, label: "Créditos" },
-    { to: "/settings", icon: Settings, label: "Ajustes" },
+    { to: "/subscriptions", icon: Crown, label: "Assinaturas" },
+    { to: "/domains", icon: Globe2, label: "Domínios" },
+    { to: "/connectors", icon: Plug, label: "Conectores" },
+    { to: "/settings", icon: Settings, label: "Configurações" },
+    { to: "/profile", icon: UserRound, label: "Perfil" },
   ];
   if (roleData?.isAdmin) {
     nav.push({ to: "/admin", icon: Crown, label: "Admin" });
@@ -93,7 +100,10 @@ function AuthLayout() {
           <div className="size-8 rounded-lg bg-gradient-primary shadow-glow grid place-items-center">
             <Sparkles className="size-4 text-primary-foreground" />
           </div>
-          <span className="font-display font-bold">ForzaAI</span>
+          <div className="min-w-0">
+            <span className="font-display font-bold leading-none">ForzaAI</span>
+            <div className="text-[10px] text-muted-foreground leading-none mt-1">SaaS Studio</div>
+          </div>
         </Link>
 
         <nav className="flex-1 p-3 space-y-1">
@@ -105,7 +115,7 @@ function AuthLayout() {
                 key={item.to}
                 to={item.to}
                 className={cn(
-                  "flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors",
+                  "flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition-colors",
                   active
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",

@@ -1,6 +1,7 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,16 +9,25 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
-import { Loader2, LogOut, AlertTriangle } from "lucide-react";
+import { Loader2, LogOut, AlertTriangle, Sparkles } from "lucide-react";
+import { createSkill, listSkills } from "@/lib/skills.functions";
 
 export const Route = createFileRoute("/_authenticated/settings")({ component: Settings });
 
 function Settings() {
   const qc = useQueryClient();
   const router = useRouter();
+  const createSkillFn = useServerFn(createSkill);
+  const listSkillsFn = useServerFn(listSkills);
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
   const [fullName, setFullName] = useState("");
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [skillName, setSkillName] = useState("");
+  const [skillDescription, setSkillDescription] = useState("");
+  const [skillPrompt, setSkillPrompt] = useState("");
+  const [notificationPermission, setNotificationPermission] = useState(
+    typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported",
+  );
 
   useEffect(() => {
     supabase.auth
@@ -38,6 +48,11 @@ function Settings() {
     },
   });
 
+  const { data: skills } = useQuery({
+    queryKey: ["skills"],
+    queryFn: () => listSkillsFn(),
+  });
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       const { error } = await supabase
@@ -53,6 +68,26 @@ function Settings() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const createSkillMutation = useMutation({
+    mutationFn: async () =>
+      createSkillFn({
+        data: {
+          name: skillName,
+          description: skillDescription,
+          prompt: skillPrompt,
+          isActive: true,
+        },
+      }),
+    onSuccess: () => {
+      setSkillName("");
+      setSkillDescription("");
+      setSkillPrompt("");
+      qc.invalidateQueries({ queryKey: ["skills"] });
+      toast.success("Skill criada");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.navigate({ to: "/" });
@@ -64,6 +99,16 @@ function Settings() {
     });
     if (error) toast.error(error.message);
     else toast.success("Email de redefinição enviado");
+  };
+
+  const handleEnableNotifications = async () => {
+    if (!("Notification" in window)) {
+      toast.error("Este navegador não suporta notificações.");
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+    if (permission === "granted") toast.success("Notificações ativadas");
   };
 
   return (
@@ -107,10 +152,25 @@ function Settings() {
             <div>
               <div className="font-medium">Sons da interface</div>
               <div className="text-sm text-muted-foreground">
-                Tocar sons ao concluir gerações de IA.
+                Tocar sons em cliques e ao concluir gerações de IA.
               </div>
             </div>
             <Switch checked={soundEnabled} onCheckedChange={setSoundEnabled} />
+          </div>
+          <div className="mt-4 flex items-center justify-between gap-4 border-t border-border pt-4">
+            <div>
+              <div className="font-medium">Notificações do navegador</div>
+              <div className="text-sm text-muted-foreground">
+                Avisar quando uma geração terminar. Status: {notificationPermission}
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              onClick={handleEnableNotifications}
+              disabled={notificationPermission === "granted" || notificationPermission === "unsupported"}
+            >
+              {notificationPermission === "granted" ? "Ativadas" : "Ativar"}
+            </Button>
           </div>
         </section>
 
@@ -124,6 +184,53 @@ function Settings() {
             Salvar alterações
           </Button>
         </div>
+
+        <section className="p-6 rounded-xl border border-border bg-card">
+          <div className="flex items-center gap-2">
+            <Sparkles className="size-5 text-primary" />
+            <h2 className="font-display text-lg font-semibold">Skills com IA</h2>
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            Crie comportamentos personalizados para ativar em projetos específicos.
+          </p>
+          <div className="mt-5 grid gap-3">
+            <Input
+              value={skillName}
+              onChange={(e) => setSkillName(e.target.value)}
+              placeholder="Nome da skill"
+            />
+            <Input
+              value={skillDescription}
+              onChange={(e) => setSkillDescription(e.target.value)}
+              placeholder="Descrição curta"
+            />
+            <textarea
+              value={skillPrompt}
+              onChange={(e) => setSkillPrompt(e.target.value)}
+              placeholder="Prompt completo da skill"
+              className="min-h-28 rounded-md border border-input bg-background px-3 py-2 text-sm"
+            />
+            <div className="flex justify-end">
+              <Button
+                onClick={() => createSkillMutation.mutate()}
+                disabled={createSkillMutation.isPending || !skillName.trim() || !skillPrompt.trim()}
+              >
+                {createSkillMutation.isPending && <Loader2 className="size-4 animate-spin" />}
+                Criar skill
+              </Button>
+            </div>
+          </div>
+          <div className="mt-5 grid gap-2">
+            {(skills ?? []).map((skill: any) => (
+              <div key={skill.id} className="rounded-lg border border-border p-3">
+                <div className="font-medium text-sm">
+                  {skill.name} {skill.is_global && <span className="text-xs text-primary">Global</span>}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">{skill.description}</div>
+              </div>
+            ))}
+          </div>
+        </section>
 
         <section className="p-6 rounded-xl border border-border bg-card">
           <h2 className="font-display text-lg font-semibold">Segurança</h2>

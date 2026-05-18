@@ -30,9 +30,6 @@ function Landing() {
             <a href="#pricing" className="hover:text-foreground transition-colors">
               Preços
             </a>
-            <a href="#faq" className="hover:text-foreground transition-colors">
-              FAQ
-            </a>
           </nav>
           <Link to="/login">
             <Button variant="default" className="bg-gradient-primary shadow-glow hover:opacity-90">

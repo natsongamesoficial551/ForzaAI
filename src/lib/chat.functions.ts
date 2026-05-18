@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { routeAiModel } from "./ai-model-router";
+import { getServerEnv } from "./server-env";
 
 const SYSTEM_PROMPT = `Você é o ForzaAI, um assistente especialista em criar sites profissionais para empresários brasileiros.
 
@@ -20,6 +22,28 @@ const InputSchema = z.object({
   projectId: z.string().uuid(),
   message: z.string().min(1).max(4000),
 });
+
+const WizardInputSchema = z.object({
+  projectId: z.string().uuid(),
+  prompt: z.string().min(6).max(4000),
+});
+
+const WizardOutputSchema = z.object({
+  shouldAsk: z.boolean(),
+  summary: z.string().optional(),
+  questions: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        question: z.string().min(1),
+        options: z.array(z.string().min(1)).min(2).max(5),
+      }),
+    )
+    .min(0)
+    .max(20),
+});
+
+type WizardQuestion = z.infer<typeof WizardOutputSchema>["questions"][number];
 
 type GeneratedFile = {
   path: "index.html" | "styles.css" | "script.js";
@@ -74,6 +98,21 @@ function normalizeOutput(raw: unknown): { message: string; files: GeneratedFile[
   };
 }
 
+function normalizeWizard(raw: unknown): { shouldAsk: boolean; summary?: string; questions: WizardQuestion[] } {
+  const parsed = WizardOutputSchema.parse(raw);
+  const questions = parsed.questions.slice(0, 20).map((question, index) => ({
+    id: question.id || `q${index + 1}`,
+    question: question.question,
+    options: question.options.slice(0, 5),
+  }));
+
+  return {
+    shouldAsk: parsed.shouldAsk && questions.length >= 10,
+    summary: parsed.summary,
+    questions,
+  };
+}
+
 async function generateAndUploadImage(_opts: {
   prompt: string;
   projectId: string;
@@ -85,8 +124,8 @@ async function generateAndUploadImage(_opts: {
 }
 
 async function processImageTags(html: string, projectId: string, apiKey: string): Promise<string> {
-  const supabaseUrl = process.env.SUPABASE_URL!;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  const supabaseUrl = getServerEnv("SUPABASE_URL");
+  const serviceKey = getServerEnv("SUPABASE_SERVICE_ROLE_KEY");
   const re = /<img\b[^>]*?\bdata-ai-gen="([^"]+)"[^>]*>/gi;
   const tags: { full: string; prompt: string }[] = [];
   let m: RegExpExecArray | null;
@@ -115,28 +154,114 @@ async function processImageTags(html: string, projectId: string, apiKey: string)
   });
 }
 
-export const sendChatMessage = createServerFn({ method: "POST" })
+async function loadActiveSkills(supabase: any, projectId: string) {
+  const { data } = await supabase
+    .from("project_skill_activations")
+    .select("ai_skills(name, description, prompt)")
+    .eq("project_id", projectId);
+
+  return (data ?? [])
+    .map((row: any) => row.ai_skills)
+    .filter(Boolean)
+    .map((skill: any) => `Skill: ${skill.name}\nDescrição: ${skill.description}\nInstrução: ${skill.prompt}`)
+    .join("\n\n");
+}
+
+export const generateProjectWizard = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => InputSchema.parse(input))
-  .handler(async function* ({ data, context }) {
+  .inputValidator((input: unknown) => WizardInputSchema.parse(input))
+  .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
-    const apiKey = process.env.DEEPSEEK_API_KEY;
-    if (!apiKey) throw new Error("DEEPSEEK_API_KEY ausente");
+    const model = routeAiModel({ hasSubscription: false });
+
+    const { data: canEdit } = await supabase.rpc("can_edit_project", {
+      _project_id: data.projectId,
+      _user_id: userId,
+    });
+    if (!canEdit) throw new Error("Projeto não encontrado");
 
     const { data: project, error: projErr } = await supabase
       .from("projects")
       .select("id, name, site_type, description")
       .eq("id", data.projectId)
-      .eq("user_id", userId)
       .single();
     if (projErr || !project) throw new Error("Projeto não encontrado");
 
-    const { data: debited, error: debitErr } = await supabase.rpc("debit_credits", {
-      _amount: 1,
-      _description: `Mensagem no projeto ${project.name}`,
+    const upstream = await fetch(model.endpoint, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${model.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: model.upstreamModel,
+        stream: false,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "Você é o wizard anti-alucinação do ForzaAI. Analise o primeiro prompt do usuário. Se for pedido de site, landing page, SaaS, app, produto digital, e-commerce, portfólio ou sistema, retorne shouldAsk=true e gere de 10 a 20 perguntas obrigatórias de múltipla escolha para coletar contexto antes da criação. Cada pergunta deve ter 2 a 5 opções curtas. Se não for pedido de criação/planejamento de produto, retorne shouldAsk=false e questions=[]. Responda apenas JSON no formato {\"shouldAsk\":boolean,\"summary\":\"...\",\"questions\":[{\"id\":\"q1\",\"question\":\"...\",\"options\":[\"...\"]}]}",
+          },
+          {
+            role: "user",
+            content: `Projeto: ${project.name}\nTipo atual: ${project.site_type}\nDescrição atual: ${project.description ?? "—"}\nPrompt inicial: ${data.prompt}`,
+          },
+        ],
+      }),
+    });
+
+    if (!upstream.ok) {
+      const errTxt = await upstream.text().catch(() => "");
+      throw new Error(`Falha ao preparar perguntas (${upstream.status}): ${errTxt.slice(0, 200)}`);
+    }
+
+    const payload = await upstream.json();
+    const content = payload?.choices?.[0]?.message?.content;
+    if (typeof content !== "string") throw new Error("Resposta inválida do wizard");
+
+    const wizard = normalizeWizard(extractJson(content));
+    if (wizard.shouldAsk) {
+      await supabase.from("project_memory").upsert(
+        {
+          project_id: data.projectId,
+          category: "wizard",
+          key: "initial_questions",
+          value: JSON.stringify({ prompt: data.prompt, ...wizard }),
+        },
+        { onConflict: "project_id,key" },
+      );
+    }
+
+    return wizard;
+  });
+
+export const sendChatMessage = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => InputSchema.parse(input))
+  .handler(async function* ({ data, context }) {
+    const { supabase, userId } = context;
+    const model = routeAiModel({ hasSubscription: false, preferFast: true });
+
+    const { data: canEdit } = await supabase.rpc("can_edit_project", {
+      _project_id: data.projectId,
+      _user_id: userId,
+    });
+    if (!canEdit) throw new Error("Projeto não encontrado");
+
+    const { data: project, error: projErr } = await supabase
+      .from("projects")
+      .select("id, name, site_type, description, user_id")
+      .eq("id", data.projectId)
+      .single();
+    if (projErr || !project) throw new Error("Projeto não encontrado");
+
+    const creditCost = Math.ceil(model.creditMultiplier);
+    const { data: debited, error: debitErr } = await supabase.rpc("debit_project_owner_credits", {
+      _project_id: data.projectId,
+      _amount: creditCost,
+      _description: `${model.label} no projeto ${project.name}`,
     });
     if (debitErr) throw new Error(debitErr.message);
-    if (!debited) throw new Error("Créditos insuficientes.");
+    if (!debited) throw new Error("Créditos insuficientes do dono do projeto.");
 
     let { data: convo } = await supabase
       .from("conversations")
@@ -174,15 +299,17 @@ export const sendChatMessage = createServerFn({ method: "POST" })
     const filesContext =
       (currentFiles ?? []).map((f) => `--- ${f.path} ---\n${f.content}`).join("\n\n") ||
       "(sem arquivos ainda)";
+    const skillsContext = await loadActiveSkills(supabase, data.projectId);
 
     yield { type: "status" as const, text: "Pensando…" };
 
-    // Call DeepSeek with streaming
-    const upstream = await fetch("https://api.deepseek.com/v1/chat/completions", {
+    yield { type: "status" as const, text: `Usando ${model.label}…` };
+
+    const upstream = await fetch(model.endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${model.apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "deepseek-v4-flash",
+        model: model.upstreamModel,
         stream: true,
         temperature: 0.3,
         response_format: { type: "json_object" },
@@ -191,7 +318,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
             role: "system",
             content:
               SYSTEM_PROMPT +
-              `\n\nProjeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}\n\nArquivos atuais:\n${filesContext}`,
+              `\n\nProjeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}${skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${skillsContext}` : ""}\n\nArquivos atuais:\n${filesContext}`,
           },
           ...(history ?? []).map((m) => ({
             role: m.role as "user" | "assistant",
@@ -263,7 +390,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       if (idx >= 0) {
         out.files[idx] = {
           ...out.files[idx],
-          content: await processImageTags(out.files[idx].content, data.projectId, apiKey),
+          content: await processImageTags(out.files[idx].content, data.projectId, model.apiKey),
         };
       }
     }

@@ -22,7 +22,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Sparkles, Globe, Trash2, ExternalLink, ArrowUp } from "lucide-react";
+import {
+  Plus,
+  Sparkles,
+  Globe,
+  Trash2,
+  ExternalLink,
+  ArrowUp,
+  MessageSquare,
+  Wand2,
+  ShieldCheck,
+} from "lucide-react";
 import { toast } from "sonner";
 import { deleteProject, deleteEmptyDrafts } from "@/lib/projects.functions";
 
@@ -135,8 +145,13 @@ function Dashboard() {
     <div className="p-8 max-w-7xl mx-auto">
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl font-bold">Seus projetos</h1>
-          <p className="text-muted-foreground mt-1">Crie sites incríveis em minutos com IA.</p>
+          <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs text-primary mb-3">
+            <MessageSquare className="size-3.5" /> Dashboard inteligente
+          </div>
+          <h1 className="font-display text-3xl font-bold">Crie seu próximo projeto no chat</h1>
+          <p className="text-muted-foreground mt-1">
+            Descreva a ideia, responda o wizard e deixe a IA montar a primeira versão.
+          </p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -186,14 +201,21 @@ function Dashboard() {
         </Dialog>
       </div>
 
-      <div className="mt-8 rounded-2xl border border-border bg-gradient-to-br from-card to-card/40 p-6 md:p-8 shadow-elegant">
-        <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-          <Sparkles className="size-3.5 text-primary" /> Comece com uma ideia
+      <div className="mt-8 rounded-[2rem] border border-border bg-gradient-to-br from-card via-card to-primary/5 p-5 md:p-8 shadow-elegant">
+        <div className="mx-auto max-w-4xl text-center">
+          <div className="inline-flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+            <Sparkles className="size-3.5 text-primary" /> ForzaAI Studio
+          </div>
+          <h2 className="font-display text-3xl md:text-5xl font-semibold mt-3 tracking-tight">
+            O que você quer construir hoje?
+          </h2>
+          <p className="text-muted-foreground mt-3 max-w-2xl mx-auto">
+            Comece com uma frase. Depois disso, o ForzaAI prepara perguntas obrigatórias para evitar
+            alucinação e criar um projeto com contexto real.
+          </p>
         </div>
-        <h2 className="font-display text-2xl md:text-3xl font-semibold mt-2">
-          O que você quer construir hoje?
-        </h2>
-        <div className="mt-5 relative rounded-xl border border-border bg-background/60 focus-within:border-primary/60 transition">
+
+        <div className="mt-8 mx-auto max-w-4xl relative rounded-3xl border border-border bg-background/80 focus-within:border-primary/60 focus-within:shadow-glow transition">
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -203,20 +225,21 @@ function Dashboard() {
                 if (!launching) handleLaunchFromPrompt();
               }
             }}
-            placeholder="Ex: Landing page para minha pizzaria com cardápio, depoimentos e WhatsApp…"
-            rows={3}
-            className="w-full resize-none bg-transparent px-4 py-3 pr-14 text-sm outline-none placeholder:text-muted-foreground"
+            placeholder="Ex: Quero criar um SaaS para clínicas gerenciarem agendamentos, pagamentos e WhatsApp…"
+            rows={5}
+            className="w-full resize-none bg-transparent px-5 py-5 pr-16 text-sm md:text-base outline-none placeholder:text-muted-foreground"
           />
           <Button
             size="icon"
             onClick={handleLaunchFromPrompt}
             disabled={launching || prompt.trim().length < 6}
-            className="absolute bottom-2 right-2 size-9 bg-gradient-primary shadow-glow"
+            className="absolute bottom-4 right-4 size-10 rounded-2xl bg-gradient-primary shadow-glow"
           >
             <ArrowUp className="size-4" />
           </Button>
         </div>
-        <div className="mt-3 flex flex-wrap gap-2">
+
+        <div className="mt-5 flex flex-wrap justify-center gap-2">
           {[
             "Site institucional para clínica odontológica",
             "Landing page de SaaS com pricing",
@@ -226,15 +249,35 @@ function Dashboard() {
             <button
               key={s}
               onClick={() => setPrompt(s)}
-              className="text-xs px-3 py-1.5 rounded-full border border-border bg-card hover:bg-muted/50 hover:border-primary/40 transition"
+              className="text-xs px-3 py-1.5 rounded-full border border-border bg-background/70 hover:bg-muted/50 hover:border-primary/40 transition"
             >
               {s}
             </button>
           ))}
         </div>
+
+        <div className="mt-8 grid gap-3 md:grid-cols-3">
+          {[
+            { icon: Wand2, title: "Wizard obrigatório", text: "Perguntas inteligentes após o primeiro prompt." },
+            { icon: ShieldCheck, title: "Mais precisão", text: "Menos invenções, mais contexto real." },
+            { icon: MessageSquare, title: "Chat central", text: "Criação começa direto na conversa." },
+          ].map((item) => (
+            <div key={item.title} className="rounded-2xl border border-border bg-background/50 p-4">
+              <item.icon className="size-4 text-primary" />
+              <h3 className="font-medium mt-2">{item.title}</h3>
+              <p className="text-xs text-muted-foreground mt-1">{item.text}</p>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="mt-10">
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <div>
+            <h2 className="font-display text-2xl font-semibold">Projetos recentes</h2>
+            <p className="text-sm text-muted-foreground">Continue editando ou publique seus sites.</p>
+          </div>
+        </div>
         {isLoading ? (
           <div className="grid md:grid-cols-3 gap-4">
             {[1, 2, 3].map((i) => (
