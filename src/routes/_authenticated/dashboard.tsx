@@ -73,15 +73,12 @@ function Dashboard() {
     const p = prompt.trim();
     if (p.length < 6) return toast.error("Descreva o site que você quer criar.");
     setLaunching(true);
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
     const guessedName = p.split(/[.,\n]/)[0].slice(0, 60) || "Novo site";
-    const { data, error } = await supabase
-      .from("projects")
-      .insert({ name: guessedName, site_type: "landing-page", user_id: user!.id, description: p })
-      .select()
-      .single();
+    const { data, error } = await supabase.rpc("create_user_project", {
+      _name: guessedName,
+      _site_type: "landing-page",
+      _description: p,
+    });
     if (error || !data) {
       setLaunching(false);
       toast.error(error?.message ?? "Não consegui criar o projeto");

@@ -62,6 +62,33 @@ as $$
   )
 $$;
 
+create or replace function public.create_user_project(_name text, _site_type text default 'landing-page', _description text default null)
+returns public.projects
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  _uid uuid := auth.uid();
+  _project public.projects;
+begin
+  if _uid is null then
+    raise exception 'Usuário não autenticado';
+  end if;
+
+  insert into public.projects (user_id, name, site_type, description)
+  values (
+    _uid,
+    nullif(trim(_name), ''),
+    coalesce(nullif(trim(_site_type), ''), 'landing-page'),
+    nullif(trim(coalesce(_description, '')), '')
+  )
+  returning * into _project;
+
+  return _project;
+end;
+$$;
+
 drop policy if exists "users own projects" on public.projects;
 drop policy if exists "users insert own projects" on public.projects;
 drop policy if exists "project owners and editors update projects" on public.projects;
@@ -318,11 +345,13 @@ $$;
 revoke execute on function public.can_access_project(uuid, uuid) from public, anon;
 revoke execute on function public.can_edit_project(uuid, uuid) from public, anon;
 revoke execute on function public.is_project_owner(uuid, uuid) from public, anon;
+revoke execute on function public.create_user_project(text, text, text) from public, anon;
 revoke execute on function public.debit_project_owner_credits(uuid, integer, text) from public, anon;
 revoke execute on function public.ensure_custom_ai_tokens() from public, anon;
 revoke execute on function public.add_custom_ai_tokens(uuid, integer) from public, anon;
 grant execute on function public.can_access_project(uuid, uuid) to authenticated;
 grant execute on function public.can_edit_project(uuid, uuid) to authenticated;
 grant execute on function public.is_project_owner(uuid, uuid) to authenticated;
+grant execute on function public.create_user_project(text, text, text) to authenticated;
 grant execute on function public.debit_project_owner_credits(uuid, integer, text) to authenticated;
 grant execute on function public.ensure_custom_ai_tokens() to authenticated;
