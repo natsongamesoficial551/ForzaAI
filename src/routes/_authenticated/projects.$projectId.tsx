@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import JSZip from "jszip";
 import html2canvas from "html2canvas";
-import { generateProjectWizard, getGenerationJob, sendChatMessage, startGenerationJob } from "@/lib/chat.functions";
+import { generateProjectWizard, getGenerationJob, listProjectFileVersions, revertProjectFileVersion, sendChatMessage, startGenerationJob } from "@/lib/chat.functions";
 import { publishProject } from "@/lib/projects.functions";
 import {
   inviteProjectCollaborator,
@@ -72,6 +72,24 @@ type ChatAttachment = {
   content: string;
 };
 
+type EngineTask = {
+  id: string;
+  position: number;
+  phase: string;
+  title: string;
+  description: string;
+  status: "pending" | "running" | "completed" | "failed";
+  error?: string | null;
+};
+
+type ProjectFileVersion = {
+  id: string;
+  version_number: number;
+  label: string;
+  summary?: string | null;
+  created_at: string;
+};
+
 const textLikeExtensions = new Set(["html", "css", "js", "ts", "tsx", "jsx", "json", "md", "txt", "csv", "xml", "svg", "yml", "yaml", "sql", "py"]);
 
 const modelOptions: Array<{ id: ForzaModelId; label: string; description: string; requiresSubscription: boolean }> = [
@@ -109,6 +127,8 @@ function Workspace() {
   const sendFn = useServerFn(sendChatMessage);
   const startJobFn = useServerFn(startGenerationJob);
   const getJobFn = useServerFn(getGenerationJob);
+  const listVersionsFn = useServerFn(listProjectFileVersions);
+  const revertVersionFn = useServerFn(revertProjectFileVersion);
   const publishFn = useServerFn(publishProject);
   const listCollaboratorsFn = useServerFn(listProjectCollaborators);
   const inviteCollaboratorFn = useServerFn(inviteProjectCollaborator);
@@ -244,6 +264,16 @@ function Workspace() {
     queryFn: () => getJobFn({ data: { jobId: activeJobId! } }),
   });
 
+  const { data: versions } = useQuery({
+    queryKey: ["file-versions", projectId],
+    queryFn: () => listVersionsFn({ data: { projectId } }),
+  });
+
+  const engineRun = activeJob?.engineRun;
+  const engineTasks = (engineRun?.tasks ?? []) as EngineTask[];
+  const validationArtifact = engineRun?.artifacts?.find((artifact: any) => artifact.kind === "validation_report");
+  const validationReport = validationArtifact?.content as { score?: number; summary?: string } | undefined;
+
   useEffect(() => {
     if (!activeJob) return;
     setStreaming(activeJob.status === "completed" || activeJob.status === "failed" ? null : { status: activeJob.stage, chars: 0 });
@@ -253,6 +283,7 @@ function Workspace() {
       setActiveJobId(null);
       qc.invalidateQueries({ queryKey: ["messages", projectId] });
       qc.invalidateQueries({ queryKey: ["files", projectId] });
+      qc.invalidateQueries({ queryKey: ["file-versions", projectId] });
       qc.invalidateQueries({ queryKey: ["profile"] });
       setPreviewKey((k) => k + 1);
       toast.success(`${activeJob.files_updated || 3} arquivo(s) atualizado(s)`);
@@ -313,6 +344,7 @@ function Workspace() {
       setStreaming(null);
       qc.invalidateQueries({ queryKey: ["messages", projectId] });
       qc.invalidateQueries({ queryKey: ["files", projectId] });
+      qc.invalidateQueries({ queryKey: ["file-versions", projectId] });
       qc.invalidateQueries({ queryKey: ["profile"] });
       setPreviewKey((k) => k + 1);
       if (res.filesUpdated > 0) {
@@ -324,6 +356,17 @@ function Workspace() {
       setStreaming(null);
       toast.error(e.message);
     },
+  });
+
+  const revertVersionMutation = useMutation({
+    mutationFn: async (versionId: string) => revertVersionFn({ data: { projectId, versionId } }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["files", projectId] });
+      qc.invalidateQueries({ queryKey: ["file-versions", projectId] });
+      setPreviewKey((k) => k + 1);
+      toast.success(`${res.filesUpdated} arquivo(s) restaurado(s)`);
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const publishMutation = useMutation({
@@ -710,6 +753,56 @@ document.addEventListener('click', function(event) {
                   </span>
                 </div>
               )}
+              {engineRun && (
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-semibold flex items-center gap-2">
+                        <Brain className="size-4 text-primary" /> Forza Engine
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Fase: {engineRun.phase} · Status: {engineRun.status}
+                      </div>
+                    </div>
+                    {validationReport?.score !== undefined && (
+                      <div className="rounded-full bg-background px-3 py-1 text-xs font-medium border border-border">
+                        Score {validationReport.score}/100
+                      </div>
+                    )}
+                  </div>
+                  {engineTasks.length > 0 && (
+                    <div className="space-y-2">
+                      {engineTasks.map((task) => (
+                        <div key={task.id} className="rounded-lg border border-border bg-background/70 p-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium truncate">{task.position}. {task.title}</div>
+                              <div className="text-[11px] text-muted-foreground line-clamp-2">{task.description}</div>
+                            </div>
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${
+                              task.status === "completed"
+                                ? "bg-green-500/10 text-green-700"
+                                : task.status === "running"
+                                  ? "bg-primary/10 text-primary"
+                                  : task.status === "failed"
+                                    ? "bg-destructive/10 text-destructive"
+                                    : "bg-muted text-muted-foreground"
+                            }`}>
+                              {task.status === "completed" ? "concluída" : task.status === "running" ? "rodando" : task.status === "failed" ? "falhou" : "pendente"}
+                            </span>
+                          </div>
+                          {task.error && <div className="text-[11px] text-destructive mt-1">{task.error}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {validationReport?.summary && (
+                    <div className="rounded-lg bg-background/70 border border-border p-2 text-xs text-muted-foreground">
+                      {validationReport.summary}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             {wizardQuestions.length > 0 && (
               <div className="border-t border-border bg-background/60 p-3 space-y-3 max-h-[45vh] overflow-auto">
@@ -960,23 +1053,54 @@ document.addEventListener('click', function(event) {
             </TabsContent>
 
             <TabsContent value="code" className="flex-1 m-0 flex">
-              <div className="w-52 border-r border-border bg-card/30 p-2 overflow-auto shrink-0">
-                <div className="text-xs uppercase tracking-wider text-muted-foreground px-2 py-1">
-                  Arquivos
+              <div className="w-64 border-r border-border bg-card/30 p-2 overflow-auto shrink-0 space-y-4">
+                <div>
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground px-2 py-1">
+                    Arquivos
+                  </div>
+                  {files && files.length > 0 ? (
+                    files.map((f) => (
+                      <button
+                        key={f.id}
+                        onClick={() => setActiveFile(f.path)}
+                        className={`w-full text-left px-2 py-1.5 rounded text-sm font-mono truncate ${currentFile?.path === f.path ? "bg-primary/20 text-foreground" : "text-muted-foreground hover:bg-card"}`}
+                      >
+                        {f.path}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-2 py-4 text-xs text-muted-foreground">Sem arquivos ainda.</div>
+                  )}
                 </div>
-                {files && files.length > 0 ? (
-                  files.map((f) => (
-                    <button
-                      key={f.id}
-                      onClick={() => setActiveFile(f.path)}
-                      className={`w-full text-left px-2 py-1.5 rounded text-sm font-mono truncate ${currentFile?.path === f.path ? "bg-primary/20 text-foreground" : "text-muted-foreground hover:bg-card"}`}
-                    >
-                      {f.path}
-                    </button>
-                  ))
-                ) : (
-                  <div className="px-2 py-4 text-xs text-muted-foreground">Sem arquivos ainda.</div>
-                )}
+                <div>
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground px-2 py-1">
+                    Versões
+                  </div>
+                  {(versions as ProjectFileVersion[] | undefined)?.length ? (
+                    <div className="space-y-2">
+                      {(versions as ProjectFileVersion[]).map((version) => (
+                        <div key={version.id} className="rounded-lg border border-border bg-background/70 p-2">
+                          <div className="text-xs font-medium">{version.label}</div>
+                          <div className="text-[11px] text-muted-foreground line-clamp-2 mt-1">
+                            {version.summary || `Snapshot ${version.version_number}`}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="mt-2 h-7 w-full text-xs"
+                            onClick={() => revertVersionMutation.mutate(version.id)}
+                            disabled={revertVersionMutation.isPending || generationJobMutation.isPending || !!activeJobId}
+                          >
+                            {revertVersionMutation.isPending ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
+                            Reverter
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="px-2 py-4 text-xs text-muted-foreground">Sem versões ainda.</div>
+                  )}
+                </div>
               </div>
               <div className="flex-1 min-w-0">
                 {currentFile ? (

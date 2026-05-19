@@ -53,6 +53,15 @@ const JobStatusInputSchema = z.object({
   jobId: z.string().uuid(),
 });
 
+const EngineVersionInputSchema = z.object({
+  projectId: z.string().uuid(),
+});
+
+const RevertVersionInputSchema = z.object({
+  projectId: z.string().uuid(),
+  versionId: z.string().uuid(),
+});
+
 const WizardInputSchema = z.object({
   projectId: z.string().uuid(),
   prompt: z.string().min(6).max(4000),
@@ -432,14 +441,21 @@ export const startGenerationJob = createServerFn({ method: "POST" })
       .single();
     if (error) throw error;
 
+    const engineUrl = getOptionalServerEnv("FORZA_ENGINE_URL");
+    const engineSecret = getOptionalServerEnv("FORZA_ENGINE_SECRET") || getServerEnv("SUPABASE_SERVICE_ROLE_KEY");
     const baseUrl = getOptionalServerEnv("URL") || getOptionalServerEnv("DEPLOY_PRIME_URL");
-    if (!baseUrl) throw new Error("URL do deploy não configurada para iniciar geração em background.");
+    const backgroundUrl = engineUrl
+      ? `${engineUrl.replace(/\/$/, "")}/generate-site-background`
+      : baseUrl
+        ? `${baseUrl}/.netlify/functions/generate-site-background`
+        : null;
+    if (!backgroundUrl) throw new Error("URL do motor de geração não configurada.");
 
-    fetch(`${baseUrl}/.netlify/functions/generate-site-background`, {
+    fetch(backgroundUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-generation-secret": getServerEnv("SUPABASE_SERVICE_ROLE_KEY"),
+        "x-generation-secret": engineSecret,
       },
       body: JSON.stringify({ jobId: job.id }),
     }).catch((error) => console.error("[AI generation] background-start-error", error));
@@ -458,7 +474,105 @@ export const getGenerationJob = createServerFn({ method: "POST" })
       .eq("user_id", context.userId)
       .single();
     if (error) throw error;
-    return job;
+
+    const { data: engineRun } = await context.supabase
+      .from("engine_runs")
+      .select("id, status, phase, mode, plan, current_version_id, error, created_at, updated_at, completed_at")
+      .eq("generation_job_id", data.jobId)
+      .maybeSingle();
+
+    const runId = engineRun?.id;
+    const [{ data: tasks }, { data: artifacts }, { data: version }] = await Promise.all([
+      runId
+        ? context.supabase
+            .from("engine_tasks")
+            .select("id, position, phase, title, description, status, output, error, created_at, updated_at, completed_at")
+            .eq("run_id", runId)
+            .order("position")
+        : Promise.resolve({ data: [] }),
+      runId
+        ? context.supabase
+            .from("engine_artifacts")
+            .select("id, kind, content, created_at")
+            .eq("run_id", runId)
+            .in("kind", ["validation_report", "product_plan", "technical_plan"])
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: [] }),
+      engineRun?.current_version_id
+        ? context.supabase
+            .from("project_file_versions")
+            .select("id, version_number, label, summary, created_at")
+            .eq("id", engineRun.current_version_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
+
+    return {
+      ...job,
+      engineRun: engineRun
+        ? {
+            ...engineRun,
+            tasks: tasks ?? [],
+            artifacts: artifacts ?? [],
+            version,
+          }
+        : null,
+    };
+  });
+
+export const listProjectFileVersions = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => EngineVersionInputSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { data: canEdit } = await context.supabase.rpc("can_edit_project", {
+      _project_id: data.projectId,
+      _user_id: context.userId,
+    });
+    if (!canEdit) throw new Error("Projeto não encontrado");
+
+    const { data: versions, error } = await context.supabase
+      .from("project_file_versions")
+      .select("id, version_number, label, summary, created_at")
+      .eq("project_id", data.projectId)
+      .order("version_number", { ascending: false })
+      .limit(20);
+    if (error) throw error;
+    return versions ?? [];
+  });
+
+export const revertProjectFileVersion = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => RevertVersionInputSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { data: canEdit } = await context.supabase.rpc("can_edit_project", {
+      _project_id: data.projectId,
+      _user_id: context.userId,
+    });
+    if (!canEdit) throw new Error("Projeto não encontrado");
+
+    const { data: version, error } = await context.supabase
+      .from("project_file_versions")
+      .select("id, files")
+      .eq("id", data.versionId)
+      .eq("project_id", data.projectId)
+      .single();
+    if (error || !version) throw error ?? new Error("Versão não encontrada");
+
+    const files = Array.isArray(version.files)
+      ? version.files
+          .map((file) => {
+            const obj = file as Record<string, unknown>;
+            const path = normalizePath(obj.path);
+            const content = typeof obj.content === "string" ? obj.content : "";
+            if (!path || !content.trim()) return null;
+            return { path, language: languageFor(path), content } satisfies GeneratedFile;
+          })
+          .filter(Boolean)
+      : [];
+    if (files.length === 0) throw new Error("Essa versão não tem arquivos válidos.");
+
+    await saveGeneratedFiles(context.supabase, data.projectId, files as GeneratedFile[]);
+    return { filesUpdated: files.length };
   });
 
 export const generateProjectWizard = createServerFn({ method: "POST" })
