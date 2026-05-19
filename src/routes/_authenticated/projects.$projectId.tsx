@@ -227,7 +227,16 @@ function Workspace() {
         );
       });
       const request = async () => {
-        const stream = await sendFn({ data: { projectId, message, modelId: selectedModel, attachments: messageAttachments, previewSnapshot } });
+        let stream;
+        try {
+          stream = await sendFn({ data: { projectId, message, modelId: selectedModel, attachments: messageAttachments, previewSnapshot } });
+        } catch (error) {
+          const raw = error instanceof Error ? error.message : String(error);
+          if (/502|Bad Gateway|unknown error|errorType/i.test(raw)) {
+            throw new Error("A geração falhou no servidor da hospedagem. Tente novamente; se repetir, use Forza 1.0 Pro ou reduza o prompt.");
+          }
+          throw error;
+        }
         let result = { message: "", filesUpdated: 0 };
         for await (const chunk of stream) {
           if (chunk.type === "status") {

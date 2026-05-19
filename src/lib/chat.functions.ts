@@ -344,80 +344,41 @@ async function fetchAiText(model: RoutedAiModel, body: Record<string, unknown>) 
   return content;
 }
 
+function extractDelimitedFile(text: string, path: GeneratedFile["path"]) {
+  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`===\\s*${escaped}\\s*===\\s*([\\s\\S]*?)(?=\\n===\\s*(?:index\\.html|styles\\.css|script\\.js)\\s*===|$)`, "i");
+  return stripGeneratedCode(text.match(re)?.[1] ?? "", languageFor(path)).trim();
+}
+
 async function generateReliableSiteFiles(opts: {
   model: RoutedAiModel;
   project: { name: string; site_type: string; description?: string | null };
   userBrief: string;
   filesContext: string;
   skillsContext: string;
-  onStatus: (text: string) => void;
 }) {
   const baseContext = `Projeto: ${opts.project.name} (${opts.project.site_type})\nDescrição: ${opts.project.description ?? "—"}${opts.skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${opts.skillsContext}` : ""}\n\nArquivos atuais:\n${opts.filesContext}\n\nPedido do usuário:\n${opts.userBrief}`;
 
-  opts.onStatus("Planejando estrutura do site…");
-  const plan = await fetchAiText(opts.model, {
+  const content = await fetchAiText(opts.model, {
     stream: false,
-    temperature: 0.25,
+    temperature: 0.2,
     messages: [
       {
         role: "system",
         content:
-          "Você é o arquiteto de produto do ForzaAI. Crie um plano objetivo para uma landing page/site profissional nível Lovable: seções, visual, copy, CTAs, responsividade, acessibilidade e interações. Não gere código ainda. Responda em português, curto e acionável.",
+          "Você é o ForzaAI, um gerador de sites profissional nível Lovable. Gere um site completo e bonito em UMA resposta, sem JSON e sem markdown. O formato obrigatório é exatamente:\n=== index.html ===\n...HTML completo...\n=== styles.css ===\n...CSS completo...\n=== script.js ===\n...JS completo...\nHTML deve linkar styles.css e script.js, ser mobile-first, semântico, com SEO, acessível e copy em português do Brasil. CSS deve ser refinado, moderno, responsivo, com variáveis e Google Fonts. JS deve ser puro, seguro e simples. Não faça perguntas em Build: escolha detalhes profissionais coerentes.",
       },
       { role: "user", content: baseContext },
     ],
   });
 
-  opts.onStatus("Gerando HTML semântico…");
-  let html = stripGeneratedCode(
-    await fetchAiText(opts.model, {
-      stream: false,
-      temperature: 0.2,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Gere APENAS o conteúdo completo de index.html, sem markdown. HTML5 completo, sem CSS inline, linkando styles.css e script.js. Mobile-first, SEO completo, acessível, copy em português do Brasil. Use até 4 imagens com <img data-ai-gen=\"prompt in English\" alt=\"...\" class=\"...\">.",
-        },
-        { role: "user", content: `${baseContext}\n\nPlano aprovado:\n${plan}` },
-      ],
-    }),
-    "html",
-  );
+  let html = extractDelimitedFile(content, "index.html");
+  const css = extractDelimitedFile(content, "styles.css");
+  const js = extractDelimitedFile(content, "script.js");
 
-  opts.onStatus("Gerando design visual…");
-  const css = stripGeneratedCode(
-    await fetchAiText(opts.model, {
-      stream: false,
-      temperature: 0.25,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Gere APENAS o conteúdo completo de styles.css, sem markdown. Design moderno, profissional, responsivo, com variáveis CSS, tipografia elegante via Google Fonts import, animações sutis, contraste acessível, layout refinado e nada genérico.",
-        },
-        { role: "user", content: `${baseContext}\n\nPlano:\n${plan}\n\nHTML:\n${html}` },
-      ],
-    }),
-    "css",
-  );
-
-  opts.onStatus("Gerando interações…");
-  const js = stripGeneratedCode(
-    await fetchAiText(opts.model, {
-      stream: false,
-      temperature: 0.15,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Gere APENAS o conteúdo completo de script.js, sem markdown. JavaScript puro e seguro para menu mobile, smooth scroll, validação de formulário, pequenos efeitos acessíveis. Não use dependências externas nem chaves/API secrets.",
-        },
-        { role: "user", content: `${baseContext}\n\nPlano:\n${plan}\n\nHTML:\n${html}` },
-      ],
-    }),
-    "javascript",
-  );
+  if (!html || !css || !js) {
+    throw new Error("A IA não retornou os 3 arquivos no formato correto. Tente novamente ou use um modelo Pro.");
+  }
 
   if (!/<html[\s>]/i.test(html)) {
     html = `<!doctype html>\n<html lang="pt-BR">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${opts.project.name}</title>\n  <link rel="stylesheet" href="styles.css" />\n</head>\n<body>\n${html}\n  <script src="script.js"></script>\n</body>\n</html>`;
@@ -605,16 +566,15 @@ export const sendChatMessage = createServerFn({ method: "POST" })
 
     if (isBuildRequest) {
       yield { type: "status" as const, text: `Iniciando geração completa com ${model.label}…` };
+      logStage("build-file-generation-start");
       out = await generateReliableSiteFiles({
         model,
         project,
         userBrief: enrichedMessage,
         filesContext,
         skillsContext,
-        onStatus: (text) => {
-          logStage(text);
-        },
       });
+      logStage("build-file-generation-done", { files: out.files.length });
       yield { type: "progress" as const, chars: out.files.reduce((sum, file) => sum + file.content.length, 0) };
     } else {
       yield { type: "status" as const, text: `Chamando ${model.label} (${model.upstreamModel})…` };
