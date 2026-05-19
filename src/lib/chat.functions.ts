@@ -238,17 +238,24 @@ async function fetchAiCompletion(model: ReturnType<typeof routeAiModel>, body: R
   let lastError = "";
 
   for (const upstreamModel of models) {
-    const upstream = await fetch(model.endpoint, {
-      method: "POST",
-      headers: aiHeaders(model),
-      body: JSON.stringify({ ...body, model: upstreamModel }),
-    });
-    if (upstream.ok) return upstream;
+    try {
+      const timeout = AbortSignal.timeout(90_000);
+      const upstream = await fetch(model.endpoint, {
+        method: "POST",
+        headers: aiHeaders(model),
+        signal: timeout,
+        body: JSON.stringify({ ...body, model: upstreamModel }),
+      });
+      if (upstream.ok) return upstream;
 
-    const errTxt = await upstream.text().catch(() => "");
-    lastError = `Falha na IA (${upstream.status}) usando ${upstreamModel}: ${errTxt.slice(0, 240)}`;
-    if (model.provider !== "openrouter" || ![408, 429, 500, 502, 503, 504].includes(upstream.status)) {
-      throw new Error(lastError);
+      const errTxt = await upstream.text().catch(() => "");
+      lastError = `Falha na IA (${upstream.status}) usando ${upstreamModel}: ${errTxt.slice(0, 240)}`;
+      if (model.provider !== "openrouter" || ![408, 429, 500, 502, 503, 504].includes(upstream.status)) {
+        throw new Error(lastError);
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "Tempo limite ao chamar a IA.";
+      if (model.provider !== "openrouter") throw new Error(lastError);
     }
   }
 

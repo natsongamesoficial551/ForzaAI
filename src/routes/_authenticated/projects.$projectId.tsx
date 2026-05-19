@@ -97,6 +97,7 @@ function Workspace() {
   const [wizardPrompt, setWizardPrompt] = useState("");
   const [wizardQuestions, setWizardQuestions] = useState<WizardQuestion[]>([]);
   const [wizardAnswers, setWizardAnswers] = useState<Record<string, string>>({});
+  const [wizardCustomAnswers, setWizardCustomAnswers] = useState<Record<string, string>>({});
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [readingAttachments, setReadingAttachments] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ForzaModelId>("forza-1-flash");
@@ -202,6 +203,7 @@ function Workspace() {
       setWizardPrompt(prompt);
       setWizardQuestions(wizard.questions);
       setWizardAnswers({});
+      setWizardCustomAnswers({});
       toast.info("Responda o wizard para melhorar a geração.");
     },
     onError: (e: Error) => toast.error(e.message),
@@ -450,18 +452,28 @@ function Workspace() {
     });
   };
 
+  const isCustomWizardOption = (value: string | undefined) =>
+    !!value && /^(outros?|outra|personalizado|personalizada)/i.test(value.trim());
+
+  const wizardAnswerValue = (question: WizardQuestion) => {
+    const answer = wizardAnswers[question.id];
+    if (!isCustomWizardOption(answer)) return answer?.trim() ?? "";
+    return wizardCustomAnswers[question.id]?.trim() ?? "";
+  };
+
   const handleWizardSubmit = () => {
-    if (wizardQuestions.some((question) => !wizardAnswers[question.id])) {
+    if (wizardQuestions.some((question) => !wizardAnswerValue(question))) {
       toast.error("Responda todas as perguntas obrigatórias.");
       return;
     }
 
     const context = wizardQuestions
-      .map((question, index) => `${index + 1}. ${question.question}\nResposta: ${wizardAnswers[question.id]}`)
+      .map((question, index) => `${index + 1}. ${question.question}\nResposta: ${wizardAnswerValue(question)}`)
       .join("\n\n");
 
     setWizardQuestions([]);
     setWizardAnswers({});
+    setWizardCustomAnswers({});
     sendMutation.mutate({ message: `Prompt inicial do cliente:\n${wizardPrompt}\n\nPlan aprovado pelo cliente:\n${context}\n\nModo Build: gere agora os arquivos completos do site com base no prompt inicial e nas respostas acima.` });
   };
 
@@ -629,21 +641,36 @@ document.addEventListener('click', function(event) {
                     <div className="mt-2 grid gap-2">
                       {question.options.map((option) => {
                         const selected = wizardAnswers[question.id] === option;
+                        const isCustom = isCustomWizardOption(option);
                         return (
-                          <button
-                            key={option}
-                            type="button"
-                            onClick={() =>
-                              setWizardAnswers((current) => ({ ...current, [question.id]: option }))
-                            }
-                            className={`rounded-lg border px-3 py-2 text-left text-xs transition ${
-                              selected
-                                ? "border-primary bg-primary/10 text-foreground"
-                                : "border-border hover:border-primary/50 text-muted-foreground"
-                            }`}
-                          >
-                            {option}
-                          </button>
+                          <div key={option} className="space-y-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setWizardAnswers((current) => ({ ...current, [question.id]: option }))
+                              }
+                              className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition ${
+                                selected
+                                  ? "border-primary bg-primary/10 text-foreground"
+                                  : "border-border hover:border-primary/50 text-muted-foreground"
+                              }`}
+                            >
+                              {option}
+                            </button>
+                            {selected && isCustom && (
+                              <Textarea
+                                value={wizardCustomAnswers[question.id] ?? ""}
+                                onChange={(event) =>
+                                  setWizardCustomAnswers((current) => ({
+                                    ...current,
+                                    [question.id]: event.target.value,
+                                  }))
+                                }
+                                placeholder="Digite sua resposta personalizada..."
+                                className="min-h-20 resize-none text-xs"
+                              />
+                            )}
+                          </div>
                         );
                       })}
                     </div>
