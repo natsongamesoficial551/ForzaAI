@@ -132,7 +132,7 @@ async function fetchAiText(model, body) {
     });
   } catch (error) {
     if (error?.name === "AbortError") {
-      throw new Error(`O provedor ${model.label} demorou mais de ${Math.round(AI_REQUEST_TIMEOUT_MS / 1000)}s para responder e a geração foi encerrada.`);
+      throw new Error(`O provedor ${model.label} demorou mais de ${Math.round(AI_REQUEST_TIMEOUT_MS / 1000)}s para responder. Esse modelo pode estar congestionado; use um modelo menor/mais rápido para gerar site completo.`);
     }
     throw error;
   } finally {
@@ -242,13 +242,6 @@ export default async (request) => {
     const model = await routeModel(supabase, job.model_id, Boolean(hasSubscription));
 
     const creditCost = Math.ceil(model.creditMultiplier || 1);
-    const { data: debited, error: debitError } = await supabase.rpc("debit_project_owner_credits", {
-      _project_id: job.project_id,
-      _amount: creditCost,
-      _description: `${model.label} no projeto em background`,
-    });
-    if (debitError) throw debitError;
-    if (!debited) throw new Error("Créditos insuficientes do dono do projeto.");
 
     const { data: project, error: projectError } = await supabase
       .from("projects")
@@ -266,6 +259,14 @@ export default async (request) => {
     const files = await generateSiteFiles(model, project, job.message, filesContext, skillsContext);
     await updateJob(supabase, jobId, { stage: "Salvando arquivos…" });
     await saveFiles(supabase, job.project_id, files);
+
+    const { data: debited, error: debitError } = await supabase.rpc("debit_project_owner_credits", {
+      _project_id: job.project_id,
+      _amount: creditCost,
+      _description: `${model.label} no projeto em background`,
+    });
+    if (debitError) throw debitError;
+    if (!debited) throw new Error("Créditos insuficientes do dono do projeto.");
 
     let { data: convo } = await supabase.from("conversations").select("id").eq("project_id", job.project_id).order("created_at").limit(1).maybeSingle();
     if (!convo) {
