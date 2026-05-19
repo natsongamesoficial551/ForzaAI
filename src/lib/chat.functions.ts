@@ -227,39 +227,21 @@ function aiHeaders(model: ReturnType<typeof routeAiModel>) {
   return {
     Authorization: `Bearer ${model.apiKey}`,
     "Content-Type": "application/json",
-    ...(model.provider === "openrouter"
-      ? { "HTTP-Referer": "https://forzaai.netlify.app", "X-Title": "ForzaAI" }
-      : {}),
   };
 }
 
 async function fetchAiCompletion(model: ReturnType<typeof routeAiModel>, body: Record<string, unknown>) {
-  const models = [model.upstreamModel, ...(model.fallbackModels ?? [])];
-  let lastError = "";
+  const upstream = await fetch(model.endpoint, {
+    method: "POST",
+    headers: aiHeaders(model),
+    body: JSON.stringify({ ...body, model: model.upstreamModel }),
+  });
+  if (upstream.ok) return upstream;
 
-  for (const upstreamModel of models) {
-    try {
-      const timeout = AbortSignal.timeout(90_000);
-      const upstream = await fetch(model.endpoint, {
-        method: "POST",
-        headers: aiHeaders(model),
-        signal: timeout,
-        body: JSON.stringify({ ...body, model: upstreamModel }),
-      });
-      if (upstream.ok) return upstream;
-
-      const errTxt = await upstream.text().catch(() => "");
-      lastError = `Falha na IA (${upstream.status}) usando ${upstreamModel}: ${errTxt.slice(0, 240)}`;
-      if (model.provider !== "openrouter" || ![408, 429, 500, 502, 503, 504].includes(upstream.status)) {
-        throw new Error(lastError);
-      }
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : "Tempo limite ao chamar a IA.";
-      if (model.provider !== "openrouter") throw new Error(lastError);
-    }
-  }
-
-  throw new Error(lastError || "Falha ao chamar a IA.");
+  const errTxt = await upstream.text().catch(() => "");
+  if (upstream.status === 402) throw new Error("Créditos da DeepSeek esgotados.");
+  if (upstream.status === 429) throw new Error("Limite da DeepSeek atingido. Aguarde alguns segundos.");
+  throw new Error(`Falha na DeepSeek (${upstream.status}): ${errTxt.slice(0, 240)}`);
 }
 
 export const generateProjectWizard = createServerFn({ method: "POST" })
