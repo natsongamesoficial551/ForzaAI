@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 
-const AI_REQUEST_TIMEOUT_MS = 240_000;
+const AI_REQUEST_TIMEOUT_MS = 600_000;
 const MODEL_IDS = new Set(["forza-1-flash", "forza-1-pro", "forza-2-pro", "forza-2-5-thinking"]);
 
 const json = (status, body) => new Response(JSON.stringify(body), {
@@ -130,6 +130,11 @@ async function fetchAiText(model, body) {
       signal: controller.signal,
       body: JSON.stringify({ ...body, model: model.upstreamModel }),
     });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`O provedor ${model.label} demorou mais de ${Math.round(AI_REQUEST_TIMEOUT_MS / 1000)}s para responder e a geração foi encerrada.`);
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
