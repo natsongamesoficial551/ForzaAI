@@ -8,13 +8,14 @@ const SYSTEM_PROMPT = `Você é o ForzaAI, um assistente especialista em criar s
 
 REGRAS CRÍTICAS:
 1. Se ainda não souber o suficiente (nome, setor, público, cores), FAÇA UMA PERGUNTA OBJETIVA. Não invente. Nesse caso defina files = [].
-2. Quando tiver contexto suficiente, gere/atualize os arquivos: index.html, styles.css, script.js. Retorne SEMPRE os 3 arquivos completos.
-3. HTML5 semântico, responsivo, mobile-first. Inclua hero, sobre, serviços, depoimentos e CTA/contato. Meta tags SEO completas, alt em todas as imagens, acessível.
-4. CSS profissional com variáveis CSS, Google Fonts elegantes, animações sutis, design moderno e único — nada genérico.
-5. JS apenas para interações (menu mobile, smooth scroll, validação). Zero dependências externas.
-6. Para imagens use a tag especial: <img data-ai-gen="prompt em inglês descrevendo a imagem desejada" alt="..." class="..."> — o sistema gera automaticamente. Use até 4 imagens por site.
-7. Só crie recursos com IA dentro do site gerado quando o cliente pedir explicitamente, como chat com IA, analisador de PDF, gerador com IA ou assistente inteligente. Nesses casos, implemente a interface e deixe a chamada preparada para um endpoint backend protegido do ForzaAI; nunca peça API key ao usuário final e nunca exponha chave no HTML/JS.
-8. Responda em português do Brasil, amigável e direto. "message" é sua resposta curta no chat.
+2. Quando a mensagem incluir "Modo Build", NÃO faça novas perguntas: use escolhas profissionais coerentes para qualquer detalhe faltante e gere os arquivos.
+3. Quando tiver contexto suficiente ou estiver em Modo Build, gere/atualize os arquivos: index.html, styles.css, script.js. Retorne SEMPRE os 3 arquivos completos.
+4. HTML5 semântico, responsivo, mobile-first. Inclua hero, sobre, serviços, depoimentos e CTA/contato. Meta tags SEO completas, alt em todas as imagens, acessível.
+5. CSS profissional com variáveis CSS, Google Fonts elegantes, animações sutis, design moderno e único — nada genérico.
+6. JS apenas para interações (menu mobile, smooth scroll, validação). Zero dependências externas.
+7. Para imagens use a tag especial: <img data-ai-gen="prompt em inglês descrevendo a imagem desejada" alt="..." class="..."> — o sistema gera automaticamente. Use até 4 imagens por site.
+8. Só crie recursos com IA dentro do site gerado quando o cliente pedir explicitamente, como chat com IA, analisador de PDF, gerador com IA ou assistente inteligente. Nesses casos, implemente a interface e deixe a chamada preparada para um endpoint backend protegido do ForzaAI; nunca peça API key ao usuário final e nunca exponha chave no HTML/JS.
+9. Responda em português do Brasil, amigável e direto. "message" é sua resposta curta no chat.
 
 FORMATO OBRIGATÓRIO (apenas JSON, sem markdown):
 {"message":"texto para o usuário","files":[{"path":"index.html","language":"html","content":"..."},{"path":"styles.css","language":"css","content":"..."},{"path":"script.js","language":"javascript","content":"..."}]}`;
@@ -501,24 +502,42 @@ export const sendChatMessage = createServerFn({ method: "POST" })
     }
 
     const out = normalizeOutput(parsed);
-    logStage("json-normalized", { files: out.files.length });
+    const requiresFiles = /Modo Build/i.test(data.message);
+    logStage("json-normalized", { files: out.files.length, requiresFiles });
+
+    if (requiresFiles && out.files.length === 0) {
+      const fallback =
+        "A IA respondeu, mas não enviou os arquivos do site. Clique em Build novamente ou escolha o Forza 1.0 Pro/2.5 Thinking para uma geração mais completa.";
+      await supabase.from("messages").insert({
+        conversation_id: convo.id,
+        role: "assistant",
+        content: fallback,
+      });
+      yield { type: "done" as const, message: fallback, filesUpdated: 0 };
+      return;
+    }
 
     if (out.files.length > 0) {
-      yield { type: "status" as const, text: "Gerando imagens…" };
+      yield { type: "status" as const, text: "Preparando imagens…" };
       const idx = out.files.findIndex((f) => f.path === "index.html");
       if (idx >= 0) {
-        out.files[idx] = {
-          ...out.files[idx],
-          content: await processImageTags(out.files[idx].content, data.projectId, model.apiKey),
-        };
+        try {
+          out.files[idx] = {
+            ...out.files[idx],
+            content: await processImageTags(out.files[idx].content, data.projectId, model.apiKey),
+          };
+        } catch (error) {
+          console.error("[AI generation] image-processing-error", error);
+        }
       }
     }
 
-    await supabase.from("messages").insert({
+    const { error: assistantMessageErr } = await supabase.from("messages").insert({
       conversation_id: convo.id,
       role: "assistant",
       content: out.message,
     });
+    if (assistantMessageErr) throw assistantMessageErr;
 
     if (out.files.length > 0) {
       yield { type: "status" as const, text: "Salvando arquivos…" };
@@ -530,7 +549,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
           .eq("path", f.path)
           .maybeSingle();
         if (existing) {
-          await supabase
+          const { error } = await supabase
             .from("project_files")
             .update({
               content: f.content,
@@ -538,22 +557,25 @@ export const sendChatMessage = createServerFn({ method: "POST" })
               updated_at: new Date().toISOString(),
             })
             .eq("id", existing.id);
+          if (error) throw error;
         } else {
-          await supabase.from("project_files").insert({
+          const { error } = await supabase.from("project_files").insert({
             project_id: data.projectId,
             path: f.path,
             language: f.language,
             content: f.content,
           });
+          if (error) throw error;
         }
       }
-      await supabase
+      const { error: projectUpdateErr } = await supabase
         .from("projects")
         .update({
           status: "active",
           updated_at: new Date().toISOString(),
         })
         .eq("id", data.projectId);
+      if (projectUpdateErr) throw projectUpdateErr;
     }
 
     logStage("done", { filesUpdated: out.files.length });
