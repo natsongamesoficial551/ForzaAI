@@ -220,19 +220,28 @@ function Workspace() {
       previewSnapshot?: { viewport: "desktop" | "tablet" | "mobile"; html: string };
     }) => {
       setStreaming({ status: "Pensando…", chars: 0 });
-      const stream = await sendFn({ data: { projectId, message, modelId: selectedModel, attachments: messageAttachments, previewSnapshot } });
-      let result = { message: "", filesUpdated: 0 };
-      for await (const chunk of stream) {
-        if (chunk.type === "status") {
-          setStreaming((s) => ({ status: chunk.text, chars: s?.chars ?? 0 }));
-        } else if (chunk.type === "progress") {
-          setStreaming((s) => ({ status: s?.status ?? "Gerando…", chars: chunk.chars }));
-        } else if (chunk.type === "done") {
-          result = { message: chunk.message, filesUpdated: chunk.filesUpdated };
-          setStreaming(null);
+      const timeout = new Promise<never>((_, reject) => {
+        window.setTimeout(
+          () => reject(new Error("A geração demorou demais. Tente novamente ou escolha um modelo mais rápido.")),
+          130_000,
+        );
+      });
+      const request = async () => {
+        const stream = await sendFn({ data: { projectId, message, modelId: selectedModel, attachments: messageAttachments, previewSnapshot } });
+        let result = { message: "", filesUpdated: 0 };
+        for await (const chunk of stream) {
+          if (chunk.type === "status") {
+            setStreaming((s) => ({ status: chunk.text, chars: s?.chars ?? 0 }));
+          } else if (chunk.type === "progress") {
+            setStreaming((s) => ({ status: s?.status ?? "Gerando…", chars: chunk.chars }));
+          } else if (chunk.type === "done") {
+            result = { message: chunk.message, filesUpdated: chunk.filesUpdated };
+            setStreaming(null);
+          }
         }
-      }
-      return result;
+        return result;
+      };
+      return Promise.race([request(), timeout]);
     },
     onSuccess: (res) => {
       setStreaming(null);

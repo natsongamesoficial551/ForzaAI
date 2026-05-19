@@ -231,11 +231,26 @@ function aiHeaders(model: ReturnType<typeof routeAiModel>) {
 }
 
 async function fetchAiCompletion(model: ReturnType<typeof routeAiModel>, body: Record<string, unknown>) {
-  const upstream = await fetch(model.endpoint, {
-    method: "POST",
-    headers: aiHeaders(model),
-    body: JSON.stringify({ ...body, model: model.upstreamModel }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 110_000);
+  let upstream: Response;
+
+  try {
+    upstream = await fetch(model.endpoint, {
+      method: "POST",
+      headers: aiHeaders(model),
+      signal: controller.signal,
+      body: JSON.stringify({ ...body, model: model.upstreamModel }),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("A IA demorou demais para responder. Tente novamente ou escolha um modelo mais rápido.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+
   if (upstream.ok) return upstream;
 
   const errTxt = await upstream.text().catch(() => "");
