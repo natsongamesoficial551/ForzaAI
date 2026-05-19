@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { type ForzaModelId, routeAiModel } from "./ai-model-router";
+import { type ForzaModelId, type RoutedAiModel, routeAiModel } from "./ai-model-router";
 import { getServerEnv } from "./server-env";
 
 const SYSTEM_PROMPT = `Você é o ForzaAI, um assistente especialista em criar sites profissionais para empresários brasileiros.
@@ -223,7 +223,7 @@ async function loadActiveSkills(supabase: any, projectId: string) {
     .join("\n\n");
 }
 
-function aiHeaders(model: ReturnType<typeof routeAiModel>) {
+function aiHeaders(model: RoutedAiModel) {
   return {
     Authorization: `Bearer ${model.apiKey}`,
     "Content-Type": "application/json",
@@ -232,10 +232,17 @@ function aiHeaders(model: ReturnType<typeof routeAiModel>) {
 
 const AI_REQUEST_TIMEOUT_MS = 240_000;
 
-async function fetchAiCompletion(model: ReturnType<typeof routeAiModel>, body: Record<string, unknown>) {
+async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unknown>) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+  const startedAt = Date.now();
   let upstream: Response;
+
+  console.log("[AI generation] fetch-start", {
+    provider: model.provider,
+    model: model.id,
+    upstreamModel: model.upstreamModel,
+  });
 
   try {
     upstream = await fetch(model.endpoint, {
@@ -245,6 +252,13 @@ async function fetchAiCompletion(model: ReturnType<typeof routeAiModel>, body: R
       body: JSON.stringify({ ...body, model: model.upstreamModel }),
     });
   } catch (error) {
+    console.error("[AI generation] fetch-error", {
+      ms: Date.now() - startedAt,
+      provider: model.provider,
+      model: model.id,
+      upstreamModel: model.upstreamModel,
+      error,
+    });
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("A IA demorou demais para responder. Em produção, requests longas podem ser encerradas pela hospedagem; tente novamente ou escolha um modelo mais rápido.");
     }
@@ -252,6 +266,14 @@ async function fetchAiCompletion(model: ReturnType<typeof routeAiModel>, body: R
   } finally {
     clearTimeout(timeout);
   }
+
+  console.log("[AI generation] fetch-end", {
+    ms: Date.now() - startedAt,
+    status: upstream.status,
+    provider: model.provider,
+    model: model.id,
+    upstreamModel: model.upstreamModel,
+  });
 
   if (upstream.ok) return upstream;
 
@@ -324,8 +346,21 @@ export const sendChatMessage = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => InputSchema.parse(input))
   .handler(async function* ({ data, context }) {
     const { supabase, userId } = context;
+    const startedAt = Date.now();
+    const logStage = (stage: string, extra: Record<string, unknown> = {}) => {
+      console.log("[AI generation] stage", { stage, ms: Date.now() - startedAt, ...extra });
+    };
+
+    yield { type: "status" as const, text: "Validando projeto…" };
+    logStage("auth-start");
     const hasSubscription = await hasActiveSubscription(supabase, userId);
     const model = await routeAiModel({ hasSubscription, modelId: selectedModelId(data.modelId) });
+    logStage("model-routed", {
+      model: model.id,
+      label: model.label,
+      provider: model.provider,
+      upstreamModel: model.upstreamModel,
+    });
 
     const { data: canEdit } = await supabase.rpc("can_edit_project", {
       _project_id: data.projectId,
@@ -339,7 +374,9 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       .eq("id", data.projectId)
       .single();
     if (projErr || !project) throw new Error("Projeto não encontrado");
+    logStage("project-loaded", { projectId: project.id });
 
+    yield { type: "status" as const, text: "Debitando créditos…" };
     const creditCost = Math.ceil(model.creditMultiplier);
     const { data: debited, error: debitErr } = await supabase.rpc("debit_project_owner_credits", {
       _project_id: data.projectId,
@@ -348,7 +385,9 @@ export const sendChatMessage = createServerFn({ method: "POST" })
     });
     if (debitErr) throw new Error(debitErr.message);
     if (!debited) throw new Error("Créditos insuficientes do dono do projeto.");
+    logStage("credits-debited", { creditCost });
 
+    yield { type: "status" as const, text: "Carregando conversa…" };
     let { data: convo } = await supabase
       .from("conversations")
       .select("id")
@@ -365,6 +404,9 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       if (error) throw error;
       convo = created;
     }
+    logStage("conversation-ready", { conversationId: convo.id });
+
+    yield { type: "status" as const, text: "Preparando contexto…" };
     const attachmentContext = buildAttachmentContext(data.attachments);
     const previewContext = buildPreviewContext(data.previewSnapshot);
     const enrichedMessage = [
@@ -399,10 +441,14 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       content: enrichedMessage,
     };
     const historyForModel = [...(history ?? []).slice(0, -1), currentTurn];
+    logStage("context-ready", {
+      historyCount: history?.length ?? 0,
+      fileCount: currentFiles?.length ?? 0,
+      hasAttachments: Boolean(data.attachments?.length),
+      hasPreviewSnapshot: Boolean(data.previewSnapshot),
+    });
 
-    yield { type: "status" as const, text: "Pensando…" };
-
-    yield { type: "status" as const, text: `Usando ${model.label}…` };
+    yield { type: "status" as const, text: `Chamando ${model.label} (${model.upstreamModel})…` };
 
     const upstream = await fetchAiCompletion(model, {
       stream: false,
@@ -422,8 +468,10 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       ],
     });
 
+    yield { type: "status" as const, text: "Resposta recebida, estruturando arquivos…" };
     const payload = await upstream.json();
     const buffer = payload?.choices?.[0]?.message?.content;
+    logStage("response-loaded", { chars: typeof buffer === "string" ? buffer.length : 0 });
     if (typeof buffer !== "string") {
       const fallback = "A IA retornou uma resposta inválida agora. Tente novamente em alguns segundos.";
       await supabase.from("messages").insert({
@@ -453,6 +501,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
     }
 
     const out = normalizeOutput(parsed);
+    logStage("json-normalized", { files: out.files.length });
 
     if (out.files.length > 0) {
       yield { type: "status" as const, text: "Gerando imagens…" };
@@ -472,6 +521,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
     });
 
     if (out.files.length > 0) {
+      yield { type: "status" as const, text: "Salvando arquivos…" };
       for (const f of out.files) {
         const { data: existing } = await supabase
           .from("project_files")
@@ -506,5 +556,6 @@ export const sendChatMessage = createServerFn({ method: "POST" })
         .eq("id", data.projectId);
     }
 
+    logStage("done", { filesUpdated: out.files.length });
     yield { type: "done" as const, message: out.message, filesUpdated: out.files.length };
   });

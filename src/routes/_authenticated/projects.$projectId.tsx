@@ -470,6 +470,12 @@ function Workspace() {
     return wizardCustomAnswers[question.id]?.trim() ?? "";
   };
 
+  const clearWizard = () => {
+    setWizardQuestions([]);
+    setWizardAnswers({});
+    setWizardCustomAnswers({});
+  };
+
   const handleWizardSubmit = () => {
     if (wizardQuestions.some((question) => !wizardAnswerValue(question))) {
       toast.error("Responda todas as perguntas obrigatórias.");
@@ -480,10 +486,13 @@ function Workspace() {
       .map((question, index) => `${index + 1}. ${question.question}\nResposta: ${wizardAnswerValue(question)}`)
       .join("\n\n");
 
-    setWizardQuestions([]);
-    setWizardAnswers({});
-    setWizardCustomAnswers({});
+    clearWizard();
     sendMutation.mutate({ message: `Prompt inicial do cliente:\n${wizardPrompt}\n\nPlan aprovado pelo cliente:\n${context}\n\nModo Build: gere agora os arquivos completos do site com base no prompt inicial e nas respostas acima.` });
+  };
+
+  const handleSkipWizardBuild = () => {
+    clearWizard();
+    sendMutation.mutate({ message: `Prompt inicial do cliente:\n${wizardPrompt}\n\nModo Build direto: gere agora os arquivos completos do site com base no prompt inicial. Se faltar algum detalhe, use escolhas profissionais coerentes com o negócio em vez de fazer novas perguntas.` });
   };
 
   const currentFile = files?.find((f) => f.path === activeFile) ?? files?.[0];
@@ -685,13 +694,23 @@ document.addEventListener('click', function(event) {
                     </div>
                   </div>
                 ))}
-                <Button
-                  className="w-full bg-gradient-primary shadow-glow"
-                  onClick={handleWizardSubmit}
-                  disabled={sendMutation.isPending}
-                >
-                  <Hammer className="size-4" /> Build: gerar site
-                </Button>
+                <div className="grid gap-2">
+                  <Button
+                    className="w-full bg-gradient-primary shadow-glow"
+                    onClick={handleWizardSubmit}
+                    disabled={sendMutation.isPending}
+                  >
+                    <Hammer className="size-4" /> Build: gerar site
+                  </Button>
+                  <Button
+                    className="w-full"
+                    variant="outline"
+                    onClick={handleSkipWizardBuild}
+                    disabled={sendMutation.isPending}
+                  >
+                    Pular Plan e gerar direto
+                  </Button>
+                </div>
               </div>
             )}
             <div className="p-3 border-t border-border">
