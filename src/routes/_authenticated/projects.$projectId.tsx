@@ -143,8 +143,10 @@ function Workspace() {
 
   const { data: hasSubscription } = useQuery({
     queryKey: ["has-active-subscription"],
+    retry: false,
     queryFn: async () => {
-      const { data } = await supabase.rpc("has_active_subscription", {});
+      const { data, error } = await supabase.rpc("has_active_subscription");
+      if (error) return false;
       return !!data;
     },
   });

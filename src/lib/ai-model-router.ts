@@ -34,28 +34,26 @@ export function routeAiModel(opts: {
   const requestedModel = opts.modelId ?? (opts.preferFast ? "forza-1-flash" : "forza-1-pro");
   const thoughtLevel = opts.thoughtLevel ?? (requestedModel === "forza-2-5-thinking" ? "max" : requestedModel === "forza-2-pro" ? "high" : "light");
   const multiplier = getCreditMultiplier(thoughtLevel);
-  const nvidiaKey = getOptionalServerEnv("NVIDIA_API_KEY");
   const deepSeekKey = getOptionalServerEnv("DEEPSEEK_API_KEY");
 
   if ((requestedModel === "forza-2-pro" || requestedModel === "forza-2-5-thinking") && !opts.hasSubscription) {
     throw new Error("Esse modelo é exclusivo para assinantes Pro.");
   }
 
+  if (!deepSeekKey) throw new Error("DEEPSEEK_API_KEY is not configured");
+
   if (requestedModel === "forza-1-flash") {
-    if (!nvidiaKey) throw new Error("NVIDIA_API_KEY is not configured");
     return {
       id: "forza-1-flash",
       label: "Forza 1.0 Flash",
-      provider: "nvidia",
-      endpoint: "https://integrate.api.nvidia.com/v1/chat/completions",
-      upstreamModel: "zai-org/glm-4.5-air",
-      apiKey: nvidiaKey,
+      provider: "deepseek",
+      endpoint: "https://api.deepseek.com/v1/chat/completions",
+      upstreamModel: "deepseek-chat",
+      apiKey: deepSeekKey,
       creditMultiplier: multiplier,
       requiresSubscription: false,
     };
   }
-
-  if (!deepSeekKey) throw new Error("DEEPSEEK_API_KEY is not configured");
 
   if (requestedModel === "forza-2-pro") {
     return {
@@ -63,7 +61,7 @@ export function routeAiModel(opts: {
       label: "Forza 2.0 Pro",
       provider: "deepseek",
       endpoint: "https://api.deepseek.com/v1/chat/completions",
-      upstreamModel: "deepseek-v4-pro",
+      upstreamModel: "deepseek-chat",
       apiKey: deepSeekKey,
       creditMultiplier: multiplier,
       requiresSubscription: true,
@@ -88,7 +86,7 @@ export function routeAiModel(opts: {
     label: "Forza 1.0 Pro",
     provider: "deepseek",
     endpoint: "https://api.deepseek.com/v1/chat/completions",
-    upstreamModel: "deepseek-v4-flash",
+    upstreamModel: "deepseek-chat",
     apiKey: deepSeekKey,
     creditMultiplier: multiplier,
     requiresSubscription: false,

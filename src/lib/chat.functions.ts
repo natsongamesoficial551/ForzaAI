@@ -198,8 +198,12 @@ async function processImageTags(html: string, projectId: string, apiKey: string)
 }
 
 async function hasActiveSubscription(supabase: any, userId: string) {
-  const { data } = await supabase.rpc("has_active_subscription", { _user_id: userId });
-  return !!data;
+  const { data, error } = await supabase.rpc("has_active_subscription", { _user_id: userId });
+  if (!error) return !!data;
+
+  const fallback = await supabase.rpc("has_active_subscription");
+  if (fallback.error) return false;
+  return !!fallback.data;
 }
 
 function selectedModelId(modelId: ForzaModelId | undefined) {
