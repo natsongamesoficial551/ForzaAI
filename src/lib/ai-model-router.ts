@@ -9,6 +9,7 @@ export type RoutedAiModel = {
   provider: "nvidia" | "deepseek" | "openrouter";
   endpoint: string;
   upstreamModel: string;
+  fallbackModels?: string[];
   apiKey: string;
   creditMultiplier: number;
   requiresSubscription: boolean;
@@ -20,6 +21,21 @@ const thoughtMultipliers: Record<ThoughtLevel, number> = {
   high: 2.5,
   max: 4,
 };
+
+const defaultFreeOpenRouterModels = [
+  "deepseek/deepseek-v4-flash:free",
+  "z-ai/glm-4.5-air:free",
+  "qwen/qwen3-coder:free",
+  "moonshotai/kimi-k2:free",
+];
+
+function openRouterFreeModels() {
+  const configured = getOptionalServerEnv("OPENROUTER_FREE_MODELS")
+    ?.split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+  return configured && configured.length > 0 ? configured : defaultFreeOpenRouterModels;
+}
 
 export function getCreditMultiplier(level: ThoughtLevel = "light"): number {
   return thoughtMultipliers[level];
@@ -43,12 +59,14 @@ export function routeAiModel(opts: {
 
   if (requestedModel === "forza-1-flash") {
     if (openRouterKey) {
+      const freeModels = openRouterFreeModels();
       return {
         id: "forza-1-flash",
         label: "Forza 1.0 Flash",
         provider: "openrouter",
         endpoint: "https://openrouter.ai/api/v1/chat/completions",
-        upstreamModel: "deepseek/deepseek-v4-flash:free",
+        upstreamModel: freeModels[0],
+        fallbackModels: freeModels.slice(1),
         apiKey: openRouterKey,
         creditMultiplier: multiplier,
         requiresSubscription: false,

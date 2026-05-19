@@ -223,6 +223,38 @@ async function loadActiveSkills(supabase: any, projectId: string) {
     .join("\n\n");
 }
 
+function aiHeaders(model: ReturnType<typeof routeAiModel>) {
+  return {
+    Authorization: `Bearer ${model.apiKey}`,
+    "Content-Type": "application/json",
+    ...(model.provider === "openrouter"
+      ? { "HTTP-Referer": "https://forzaai.netlify.app", "X-Title": "ForzaAI" }
+      : {}),
+  };
+}
+
+async function fetchAiCompletion(model: ReturnType<typeof routeAiModel>, body: Record<string, unknown>) {
+  const models = [model.upstreamModel, ...(model.fallbackModels ?? [])];
+  let lastError = "";
+
+  for (const upstreamModel of models) {
+    const upstream = await fetch(model.endpoint, {
+      method: "POST",
+      headers: aiHeaders(model),
+      body: JSON.stringify({ ...body, model: upstreamModel }),
+    });
+    if (upstream.ok) return upstream;
+
+    const errTxt = await upstream.text().catch(() => "");
+    lastError = `Falha na IA (${upstream.status}) usando ${upstreamModel}: ${errTxt.slice(0, 240)}`;
+    if (model.provider !== "openrouter" || ![408, 429, 500, 502, 503, 504].includes(upstream.status)) {
+      throw new Error(lastError);
+    }
+  }
+
+  throw new Error(lastError || "Falha ao chamar a IA.");
+}
+
 export const generateProjectWizard = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => WizardInputSchema.parse(input))
@@ -244,38 +276,22 @@ export const generateProjectWizard = createServerFn({ method: "POST" })
       .single();
     if (projErr || !project) throw new Error("Projeto não encontrado");
 
-    const upstream = await fetch(model.endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${model.apiKey}`,
-        "Content-Type": "application/json",
-        ...(model.provider === "openrouter"
-          ? { "HTTP-Referer": "https://forzaai.netlify.app", "X-Title": "ForzaAI" }
-          : {}),
-      },
-      body: JSON.stringify({
-        model: model.upstreamModel,
-        stream: false,
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              "Você é o wizard anti-alucinação do ForzaAI. Analise o primeiro prompt do usuário. Se for pedido de site, landing page, SaaS, app, produto digital, e-commerce, portfólio ou sistema, retorne shouldAsk=true e gere de 10 a 20 perguntas obrigatórias de múltipla escolha para coletar contexto antes da criação. Cada pergunta deve ter 2 a 5 opções curtas. Se não for pedido de criação/planejamento de produto, retorne shouldAsk=false e questions=[]. Responda apenas JSON no formato {\"shouldAsk\":boolean,\"summary\":\"...\",\"questions\":[{\"id\":\"q1\",\"question\":\"...\",\"options\":[\"...\"]}]}",
-          },
-          {
-            role: "user",
-            content: `Projeto: ${project.name}\nTipo atual: ${project.site_type}\nDescrição atual: ${project.description ?? "—"}\nPrompt inicial: ${data.prompt}`,
-          },
-        ],
-      }),
+    const upstream = await fetchAiCompletion(model, {
+      stream: false,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "Você é o wizard anti-alucinação do ForzaAI. Analise o primeiro prompt do usuário. Se for pedido de site, landing page, SaaS, app, produto digital, e-commerce, portfólio ou sistema, retorne shouldAsk=true e gere de 10 a 20 perguntas obrigatórias de múltipla escolha para coletar contexto antes da criação. Cada pergunta deve ter 2 a 5 opções curtas. Se não for pedido de criação/planejamento de produto, retorne shouldAsk=false e questions=[]. Responda apenas JSON no formato {\"shouldAsk\":boolean,\"summary\":\"...\",\"questions\":[{\"id\":\"q1\",\"question\":\"...\",\"options\":[\"...\"]}]}",
+        },
+        {
+          role: "user",
+          content: `Projeto: ${project.name}\nTipo atual: ${project.site_type}\nDescrição atual: ${project.description ?? "—"}\nPrompt inicial: ${data.prompt}`,
+        },
+      ],
     });
-
-    if (!upstream.ok) {
-      const errTxt = await upstream.text().catch(() => "");
-      throw new Error(`Falha ao preparar perguntas (${upstream.status}): ${errTxt.slice(0, 200)}`);
-    }
 
     const payload = await upstream.json();
     const content = payload?.choices?.[0]?.message?.content;
@@ -382,42 +398,23 @@ export const sendChatMessage = createServerFn({ method: "POST" })
 
     yield { type: "status" as const, text: `Usando ${model.label}…` };
 
-    const upstream = await fetch(model.endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${model.apiKey}`,
-        "Content-Type": "application/json",
-        ...(model.provider === "openrouter"
-          ? { "HTTP-Referer": "https://forzaai.netlify.app", "X-Title": "ForzaAI" }
-          : {}),
-      },
-      body: JSON.stringify({
-        model: model.upstreamModel,
-        stream: false,
-        temperature: 0.3,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              SYSTEM_PROMPT +
-              `\n\nProjeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}${skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${skillsContext}` : ""}\n\nArquivos atuais:\n${filesContext}`,
-          },
-          ...historyForModel.map((m) => ({
-            role: m.role as "user" | "assistant",
-            content: m.content,
-          })),
-        ],
-      }),
+    const upstream = await fetchAiCompletion(model, {
+      stream: false,
+      temperature: 0.3,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            SYSTEM_PROMPT +
+            `\n\nProjeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}${skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${skillsContext}` : ""}\n\nArquivos atuais:\n${filesContext}`,
+        },
+        ...historyForModel.map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        })),
+      ],
     });
-
-    if (!upstream.ok || !upstream.body) {
-      const errTxt = await upstream.text().catch(() => "");
-      if (upstream.status === 402) throw new Error("Créditos da DeepSeek esgotados.");
-      if (upstream.status === 429)
-        throw new Error("Limite de requisições atingido. Aguarde alguns segundos.");
-      throw new Error(`Falha na API da DeepSeek (${upstream.status}): ${errTxt.slice(0, 200)}`);
-    }
 
     const payload = await upstream.json();
     const buffer = payload?.choices?.[0]?.message?.content;
