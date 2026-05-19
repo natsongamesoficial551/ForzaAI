@@ -441,11 +441,12 @@ export const startGenerationJob = createServerFn({ method: "POST" })
       .single();
     if (error) throw error;
 
-    const engineUrl = getOptionalServerEnv("FORZA_ENGINE_URL");
+    const engineUrl = getOptionalServerEnv("FORZA_ENGINE_URL")?.trim();
+    const normalizedEngineUrl = engineUrl && !/^https?:\/\//i.test(engineUrl) ? `https://${engineUrl}` : engineUrl;
     const engineSecret = getOptionalServerEnv("FORZA_ENGINE_SECRET") || getServerEnv("SUPABASE_SERVICE_ROLE_KEY");
     const baseUrl = getOptionalServerEnv("URL") || getOptionalServerEnv("DEPLOY_PRIME_URL");
-    const backgroundUrl = engineUrl
-      ? `${engineUrl.replace(/\/$/, "")}/generate-site-background`
+    const backgroundUrl = normalizedEngineUrl
+      ? `${normalizedEngineUrl.replace(/\/$/, "")}/generate-site-background`
       : baseUrl
         ? `${baseUrl}/.netlify/functions/generate-site-background`
         : null;
@@ -466,12 +467,13 @@ export const startGenerationJob = createServerFn({ method: "POST" })
         throw new Error(`Motor não aceitou o job (${response.status}): ${errorText.slice(0, 240)}`);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+      const message = error instanceof Error ? `${error.message}${cause}` : String(error);
       await supabase
         .from("generation_jobs")
         .update({ status: "failed", stage: "Falhou ao iniciar o motor", error: message, completed_at: new Date().toISOString() })
         .eq("id", job.id);
-      throw new Error(`Falha ao iniciar o motor de geração: ${message}`);
+      throw new Error(`Falha ao iniciar o motor de geração em ${backgroundUrl}: ${message}`);
     }
 
     return job;
