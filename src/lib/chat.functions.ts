@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { type ForzaModelId, type RoutedAiModel, routeAiModel } from "./ai-model-router";
-import { getServerEnv } from "./server-env";
+import { getOptionalServerEnv, getServerEnv } from "./server-env";
 
 const SYSTEM_PROMPT = `Você é o ForzaAI, um assistente especialista em criar sites profissionais para empresários brasileiros.
 
@@ -41,6 +41,16 @@ const InputSchema = z.object({
       html: z.string().max(120_000),
     })
     .optional(),
+});
+
+const JobInputSchema = InputSchema.pick({
+  projectId: true,
+  message: true,
+  modelId: true,
+});
+
+const JobStatusInputSchema = z.object({
+  jobId: z.string().uuid(),
 });
 
 const WizardInputSchema = z.object({
@@ -130,7 +140,7 @@ function stripGeneratedCode(text: string, language?: string) {
   return (langFence?.[1] ?? anyFence?.[1] ?? trimmed).trim();
 }
 
-async function saveGeneratedFiles(supabase: any, projectId: string, files: GeneratedFile[]) {
+export async function saveGeneratedFiles(supabase: any, projectId: string, files: GeneratedFile[]) {
   for (const f of files) {
     const { data: existing, error: lookupError } = await supabase
       .from("project_files")
@@ -334,7 +344,7 @@ async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unkn
   throw new Error(`Falha na DeepSeek (${upstream.status}): ${errTxt.slice(0, 240)}`);
 }
 
-async function fetchAiText(model: RoutedAiModel, body: Record<string, unknown>) {
+export async function fetchAiText(model: RoutedAiModel, body: Record<string, unknown>) {
   const upstream = await fetchAiCompletion(model, body);
   const payload = await upstream.json();
   const content = payload?.choices?.[0]?.message?.content;
@@ -350,7 +360,7 @@ function extractDelimitedFile(text: string, path: GeneratedFile["path"]) {
   return stripGeneratedCode(text.match(re)?.[1] ?? "", languageFor(path)).trim();
 }
 
-async function generateReliableSiteFiles(opts: {
+export async function generateReliableSiteFiles(opts: {
   model: RoutedAiModel;
   project: { name: string; site_type: string; description?: string | null };
   userBrief: string;
@@ -395,6 +405,61 @@ async function generateReliableSiteFiles(opts: {
     ] satisfies GeneratedFile[],
   };
 }
+
+export const startGenerationJob = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => JobInputSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+
+    const { data: canEdit } = await supabase.rpc("can_edit_project", {
+      _project_id: data.projectId,
+      _user_id: userId,
+    });
+    if (!canEdit) throw new Error("Projeto não encontrado");
+
+    const { data: job, error } = await supabase
+      .from("generation_jobs")
+      .insert({
+        project_id: data.projectId,
+        user_id: userId,
+        model_id: selectedModelId(data.modelId),
+        message: data.message,
+        status: "queued",
+        stage: "Na fila para gerar…",
+      })
+      .select("id, status, stage")
+      .single();
+    if (error) throw error;
+
+    const baseUrl = getOptionalServerEnv("URL") || getOptionalServerEnv("DEPLOY_PRIME_URL");
+    if (!baseUrl) throw new Error("URL do deploy não configurada para iniciar geração em background.");
+
+    fetch(`${baseUrl}/.netlify/functions/generate-site-background`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-generation-secret": getServerEnv("SUPABASE_SERVICE_ROLE_KEY"),
+      },
+      body: JSON.stringify({ jobId: job.id }),
+    }).catch((error) => console.error("[AI generation] background-start-error", error));
+
+    return job;
+  });
+
+export const getGenerationJob = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => JobStatusInputSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { data: job, error } = await context.supabase
+      .from("generation_jobs")
+      .select("id, project_id, status, stage, error, files_updated, created_at, updated_at, completed_at")
+      .eq("id", data.jobId)
+      .eq("user_id", context.userId)
+      .single();
+    if (error) throw error;
+    return job;
+  });
 
 export const generateProjectWizard = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])

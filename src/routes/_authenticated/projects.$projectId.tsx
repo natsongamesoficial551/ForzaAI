@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import JSZip from "jszip";
 import html2canvas from "html2canvas";
-import { generateProjectWizard, sendChatMessage } from "@/lib/chat.functions";
+import { generateProjectWizard, getGenerationJob, sendChatMessage, startGenerationJob } from "@/lib/chat.functions";
 import { publishProject } from "@/lib/projects.functions";
 import {
   inviteProjectCollaborator,
@@ -102,9 +102,13 @@ function Workspace() {
   const [readingAttachments, setReadingAttachments] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ForzaModelId>("forza-1-flash");
   const [modelOpen, setModelOpen] = useState(false);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const completedJobRef = useRef<string | null>(null);
   const qc = useQueryClient();
   const wizardFn = useServerFn(generateProjectWizard);
   const sendFn = useServerFn(sendChatMessage);
+  const startJobFn = useServerFn(startGenerationJob);
+  const getJobFn = useServerFn(getGenerationJob);
   const publishFn = useServerFn(publishProject);
   const listCollaboratorsFn = useServerFn(listProjectCollaborators);
   const inviteCollaboratorFn = useServerFn(inviteProjectCollaborator);
@@ -197,7 +201,7 @@ function Workspace() {
     mutationFn: async (prompt: string) => wizardFn({ data: { projectId, prompt, modelId: selectedModel } }),
     onSuccess: (wizard, prompt) => {
       if (!wizard.shouldAsk || wizard.questions.length === 0) {
-        sendMutation.mutate({ message: prompt });
+        startBuildJob(prompt);
         return;
       }
       setWizardPrompt(prompt);
@@ -208,6 +212,59 @@ function Workspace() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  const startBuildJob = (message: string) => {
+    generationJobMutation.mutate({ message });
+  };
+
+  const generationJobMutation = useMutation({
+    mutationFn: async ({ message }: { message: string }) => {
+      setStreaming({ status: "Enviando geração para background…", chars: 0 });
+      return startJobFn({ data: { projectId, message, modelId: selectedModel } });
+    },
+    onSuccess: (job) => {
+      completedJobRef.current = null;
+      setActiveJobId(job.id);
+      setStreaming({ status: job.stage ?? "Na fila para gerar…", chars: 0 });
+      toast.info("Geração iniciada em background.");
+    },
+    onError: (e: Error) => {
+      setStreaming(null);
+      toast.error(e.message);
+    },
+  });
+
+  const { data: activeJob } = useQuery({
+    queryKey: ["generation-job", activeJobId],
+    enabled: !!activeJobId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "completed" || status === "failed" ? false : 2500;
+    },
+    queryFn: () => getJobFn({ data: { jobId: activeJobId! } }),
+  });
+
+  useEffect(() => {
+    if (!activeJob) return;
+    setStreaming(activeJob.status === "completed" || activeJob.status === "failed" ? null : { status: activeJob.stage, chars: 0 });
+
+    if (activeJob.status === "completed" && completedJobRef.current !== activeJob.id) {
+      completedJobRef.current = activeJob.id;
+      setActiveJobId(null);
+      qc.invalidateQueries({ queryKey: ["messages", projectId] });
+      qc.invalidateQueries({ queryKey: ["files", projectId] });
+      qc.invalidateQueries({ queryKey: ["profile"] });
+      setPreviewKey((k) => k + 1);
+      toast.success(`${activeJob.files_updated || 3} arquivo(s) atualizado(s)`);
+      notifyGenerationComplete(profile?.sound_enabled ?? true);
+    }
+
+    if (activeJob.status === "failed" && completedJobRef.current !== activeJob.id) {
+      completedJobRef.current = activeJob.id;
+      setActiveJobId(null);
+      toast.error(activeJob.error || "A geração falhou em background.");
+    }
+  }, [activeJob, projectId, profile?.sound_enabled, qc]);
 
   const sendMutation = useMutation({
     mutationFn: async ({
@@ -352,7 +409,7 @@ function Workspace() {
 
   const handleSend = () => {
     const text = input.trim();
-    if ((!text && attachments.length === 0) || sendMutation.isPending || wizardMutation.isPending || readingAttachments) return;
+    if ((!text && attachments.length === 0) || sendMutation.isPending || generationJobMutation.isPending || !!activeJobId || wizardMutation.isPending || readingAttachments) return;
     playInterfaceSound("click", profile?.sound_enabled ?? true);
     const messageAttachments = attachments;
     setInput("");
@@ -496,12 +553,12 @@ function Workspace() {
       .join("\n\n");
 
     clearWizard();
-    sendMutation.mutate({ message: `Prompt inicial do cliente:\n${wizardPrompt}\n\nPlan aprovado pelo cliente:\n${context}\n\nModo Build: gere agora os arquivos completos do site com base no prompt inicial e nas respostas acima.` });
+    startBuildJob(`Prompt inicial do cliente:\n${wizardPrompt}\n\nPlan aprovado pelo cliente:\n${context}\n\nModo Build: gere agora os arquivos completos do site com base no prompt inicial e nas respostas acima.`);
   };
 
   const handleSkipWizardBuild = () => {
     clearWizard();
-    sendMutation.mutate({ message: `Prompt inicial do cliente:\n${wizardPrompt}\n\nModo Build direto: gere agora os arquivos completos do site com base no prompt inicial. Se faltar algum detalhe, use escolhas profissionais coerentes com o negócio em vez de fazer novas perguntas.` });
+    startBuildJob(`Prompt inicial do cliente:\n${wizardPrompt}\n\nModo Build direto: gere agora os arquivos completos do site com base no prompt inicial. Se faltar algum detalhe, use escolhas profissionais coerentes com o negócio em vez de fazer novas perguntas.`);
   };
 
   const currentFile = files?.find((f) => f.path === activeFile) ?? files?.[0];
@@ -707,15 +764,15 @@ document.addEventListener('click', function(event) {
                   <Button
                     className="w-full bg-gradient-primary shadow-glow"
                     onClick={handleWizardSubmit}
-                    disabled={sendMutation.isPending}
+                    disabled={sendMutation.isPending || generationJobMutation.isPending || !!activeJobId}
                   >
-                    <Hammer className="size-4" /> Build: gerar site
+                    {(generationJobMutation.isPending || !!activeJobId) ? <Loader2 className="size-4 animate-spin" /> : <Hammer className="size-4" />} Build: gerar site
                   </Button>
                   <Button
                     className="w-full"
                     variant="outline"
                     onClick={handleSkipWizardBuild}
-                    disabled={sendMutation.isPending}
+                    disabled={sendMutation.isPending || generationJobMutation.isPending || !!activeJobId}
                   >
                     Pular Plan e gerar direto
                   </Button>
@@ -753,7 +810,7 @@ document.addEventListener('click', function(event) {
                         : "Peça ajustes, envie prints de erro, imagens de referência, arquivos ou ZIP…"
                   }
                   className="resize-none min-h-[80px] pl-12 pr-12"
-                  disabled={sendMutation.isPending || wizardMutation.isPending || wizardQuestions.length > 0}
+                  disabled={sendMutation.isPending || generationJobMutation.isPending || !!activeJobId || wizardMutation.isPending || wizardQuestions.length > 0}
                 />
                 <label className="absolute left-2 bottom-2 grid size-8 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground">
                   {readingAttachments ? <Loader2 className="size-3.5 animate-spin" /> : <Paperclip className="size-3.5" />}
@@ -766,7 +823,7 @@ document.addEventListener('click', function(event) {
                       handleAttachmentChange(event.target.files);
                       event.currentTarget.value = "";
                     }}
-                    disabled={sendMutation.isPending || wizardMutation.isPending || wizardQuestions.length > 0 || readingAttachments}
+                    disabled={sendMutation.isPending || generationJobMutation.isPending || !!activeJobId || wizardMutation.isPending || wizardQuestions.length > 0 || readingAttachments}
                   />
                 </label>
                 <Button
@@ -775,13 +832,15 @@ document.addEventListener('click', function(event) {
                   onClick={handleSend}
                   disabled={
                     sendMutation.isPending ||
+                    generationJobMutation.isPending ||
+                    !!activeJobId ||
                     wizardMutation.isPending ||
                     wizardQuestions.length > 0 ||
                     readingAttachments ||
                     (!input.trim() && attachments.length === 0)
                   }
                 >
-                  {sendMutation.isPending ? (
+                  {sendMutation.isPending || generationJobMutation.isPending || !!activeJobId ? (
                     <Loader2 className="size-3.5 animate-spin" />
                   ) : (
                     <Send className="size-3.5" />
@@ -844,7 +903,7 @@ document.addEventListener('click', function(event) {
                   size="sm"
                   variant="outline"
                   onClick={handleReviewPreview}
-                  disabled={!hasFiles || sendMutation.isPending}
+                  disabled={!hasFiles || sendMutation.isPending || generationJobMutation.isPending || !!activeJobId}
                   title="Analisar preview com IA"
                 >
                   <Sparkles className="size-3.5" /> Revisar visual
