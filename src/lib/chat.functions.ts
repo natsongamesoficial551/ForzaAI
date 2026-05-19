@@ -230,9 +230,11 @@ function aiHeaders(model: ReturnType<typeof routeAiModel>) {
   };
 }
 
+const AI_REQUEST_TIMEOUT_MS = 240_000;
+
 async function fetchAiCompletion(model: ReturnType<typeof routeAiModel>, body: Record<string, unknown>) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 110_000);
+  const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
   let upstream: Response;
 
   try {
@@ -244,7 +246,7 @@ async function fetchAiCompletion(model: ReturnType<typeof routeAiModel>, body: R
     });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("A IA demorou demais para responder. Tente novamente ou escolha um modelo mais rápido.");
+      throw new Error("A IA demorou demais para responder. Em produção, requests longas podem ser encerradas pela hospedagem; tente novamente ou escolha um modelo mais rápido.");
     }
     throw error;
   } finally {

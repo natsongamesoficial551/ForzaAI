@@ -222,8 +222,8 @@ function Workspace() {
       setStreaming({ status: "Pensando…", chars: 0 });
       const timeout = new Promise<never>((_, reject) => {
         window.setTimeout(
-          () => reject(new Error("A geração demorou demais. Tente novamente ou escolha um modelo mais rápido.")),
-          130_000,
+          () => reject(new Error("A geração demorou demais. A hospedagem pode encerrar requests muito longas; tente novamente ou escolha um modelo mais rápido.")),
+          260_000,
         );
       });
       const request = async () => {
