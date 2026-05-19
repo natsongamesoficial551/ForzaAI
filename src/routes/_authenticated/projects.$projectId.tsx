@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import JSZip from "jszip";
+import html2canvas from "html2canvas";
 import { generateProjectWizard, sendChatMessage } from "@/lib/chat.functions";
 import { publishProject } from "@/lib/projects.functions";
 import {
@@ -25,6 +27,7 @@ import {
 import { Input } from "@/components/ui/input";
 import {
   ArrowLeft,
+  Paperclip,
   Send,
   Monitor,
   Tablet,
@@ -41,6 +44,9 @@ import {
   CheckCircle2,
   Users,
   X,
+  Brain,
+  Hammer,
+  Lock,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { notifyGenerationComplete, playInterfaceSound } from "@/lib/client-feedback";
@@ -56,6 +62,25 @@ type WizardQuestion = {
   options: string[];
 };
 
+type ForzaModelId = "forza-1-flash" | "forza-1-pro" | "forza-2-pro" | "forza-2-5-thinking";
+
+type ChatAttachment = {
+  name: string;
+  type?: string;
+  size: number;
+  kind: "image" | "zip" | "text" | "file";
+  content: string;
+};
+
+const textLikeExtensions = new Set(["html", "css", "js", "ts", "tsx", "jsx", "json", "md", "txt", "csv", "xml", "svg", "yml", "yaml", "sql", "py"]);
+
+const modelOptions: Array<{ id: ForzaModelId; label: string; description: string; requiresSubscription: boolean }> = [
+  { id: "forza-1-flash", label: "Forza 1.0 Flash", description: "Rápido e econômico", requiresSubscription: false },
+  { id: "forza-1-pro", label: "Forza 1.0 Pro", description: "Mais qualidade no plano free", requiresSubscription: false },
+  { id: "forza-2-pro", label: "Forza 2.0 Pro", description: "Modelo Pro para assinantes", requiresSubscription: true },
+  { id: "forza-2-5-thinking", label: "Forza 2.5 Thinking", description: "Raciocínio avançado", requiresSubscription: true },
+];
+
 function Workspace() {
   const { projectId } = Route.useParams();
   const [input, setInput] = useState("");
@@ -68,9 +93,14 @@ function Workspace() {
   const [collabEmail, setCollabEmail] = useState("");
   const [collabRole, setCollabRole] = useState<"viewer" | "editor">("editor");
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [initialPrompt, setInitialPrompt] = useState("");
   const [wizardPrompt, setWizardPrompt] = useState("");
   const [wizardQuestions, setWizardQuestions] = useState<WizardQuestion[]>([]);
   const [wizardAnswers, setWizardAnswers] = useState<Record<string, string>>({});
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [readingAttachments, setReadingAttachments] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<ForzaModelId>("forza-1-flash");
+  const [modelOpen, setModelOpen] = useState(false);
   const qc = useQueryClient();
   const wizardFn = useServerFn(generateProjectWizard);
   const sendFn = useServerFn(sendChatMessage);
@@ -81,6 +111,7 @@ function Workspace() {
   const listSkillsFn = useServerFn(listSkills);
   const toggleProjectSkillFn = useServerFn(toggleProjectSkill);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const previewFrameRef = useRef<HTMLIFrameElement>(null);
 
   const { data: project } = useQuery({
     queryKey: ["project", projectId],
@@ -107,6 +138,14 @@ function Workspace() {
     queryFn: async () => {
       const { data } = await supabase.from("profiles").select("sound_enabled").single();
       return data;
+    },
+  });
+
+  const { data: hasSubscription } = useQuery({
+    queryKey: ["has-active-subscription"],
+    queryFn: async () => {
+      const { data } = await supabase.rpc("has_active_subscription", {});
+      return !!data;
     },
   });
 
@@ -152,10 +191,10 @@ function Workspace() {
   });
 
   const wizardMutation = useMutation({
-    mutationFn: async (prompt: string) => wizardFn({ data: { projectId, prompt } }),
+    mutationFn: async (prompt: string) => wizardFn({ data: { projectId, prompt, modelId: selectedModel } }),
     onSuccess: (wizard, prompt) => {
       if (!wizard.shouldAsk || wizard.questions.length === 0) {
-        sendMutation.mutate(prompt);
+        sendMutation.mutate({ message: prompt });
         return;
       }
       setWizardPrompt(prompt);
@@ -167,9 +206,17 @@ function Workspace() {
   });
 
   const sendMutation = useMutation({
-    mutationFn: async (message: string) => {
+    mutationFn: async ({
+      message,
+      attachments: messageAttachments,
+      previewSnapshot,
+    }: {
+      message: string;
+      attachments?: ChatAttachment[];
+      previewSnapshot?: { viewport: "desktop" | "tablet" | "mobile"; html: string };
+    }) => {
       setStreaming({ status: "Pensando…", chars: 0 });
-      const stream = await sendFn({ data: { projectId, message } });
+      const stream = await sendFn({ data: { projectId, message, modelId: selectedModel, attachments: messageAttachments, previewSnapshot } });
       let result = { message: "", filesUpdated: 0 };
       for await (const chunk of stream) {
         if (chunk.type === "status") {
@@ -240,7 +287,26 @@ function Workspace() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, streaming]);
+  }, [messages, streaming, wizardQuestions, initialPrompt]);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`project-model:${projectId}`) as ForzaModelId | null;
+      if (saved && modelOptions.some((model) => model.id === saved)) setSelectedModel(saved);
+    } catch {}
+  }, [projectId]);
+
+  const updateSelectedModel = (modelId: ForzaModelId) => {
+    const option = modelOptions.find((model) => model.id === modelId);
+    if (option?.requiresSubscription && !hasSubscription) {
+      toast.info("Esse modelo é exclusivo para assinantes Pro.");
+      return;
+    }
+    setSelectedModel(modelId);
+    try {
+      localStorage.setItem(`project-model:${projectId}`, modelId);
+    } catch {}
+  };
 
   // Auto-send initial prompt from dashboard hero input
   useEffect(() => {
@@ -249,6 +315,7 @@ function Workspace() {
       const p = sessionStorage.getItem(key);
       if (p && !sendMutation.isPending && !wizardMutation.isPending) {
         sessionStorage.removeItem(key);
+        setInitialPrompt(p);
         wizardMutation.mutate(p);
       }
     } catch {}
@@ -256,17 +323,128 @@ function Workspace() {
   }, [projectId]);
 
   const hasFiles = (files?.length ?? 0) > 0;
+  const selectedModelOption = modelOptions.find((model) => model.id === selectedModel) ?? modelOptions[0];
+  const isPlanning = !hasFiles && (wizardQuestions.length > 0 || !!initialPrompt || (!messages || messages.length === 0));
+  const mode = isPlanning ? "plan" : "build";
 
   const handleSend = () => {
     const text = input.trim();
-    if (!text || sendMutation.isPending || wizardMutation.isPending) return;
+    if ((!text && attachments.length === 0) || sendMutation.isPending || wizardMutation.isPending || readingAttachments) return;
     playInterfaceSound("click", profile?.sound_enabled ?? true);
+    const messageAttachments = attachments;
     setInput("");
-    if (!hasFiles && (!messages || messages.length === 0)) {
+    setAttachments([]);
+    if (!hasFiles && (!messages || messages.length === 0) && messageAttachments.length === 0) {
+      setInitialPrompt(text);
       wizardMutation.mutate(text);
       return;
     }
-    sendMutation.mutate(text);
+    sendMutation.mutate({ message: text || "Analise os anexos enviados e sugira/corrija o site.", attachments: messageAttachments });
+  };
+
+  const readAttachment = async (file: File): Promise<ChatAttachment> => {
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const kind: ChatAttachment["kind"] = file.type.startsWith("image/")
+      ? "image"
+      : extension === "zip"
+        ? "zip"
+        : textLikeExtensions.has(extension) || file.type.startsWith("text/")
+          ? "text"
+          : "file";
+
+    if (kind === "zip") {
+      const zip = await JSZip.loadAsync(file);
+      const entries = Object.values(zip.files).filter((entry) => !entry.dir).slice(0, 80);
+      const projectFiles = entries.filter((entry) => {
+        const cleanName = entry.name.split("/").pop() ?? entry.name;
+        const ext = cleanName.split(".").pop()?.toLowerCase() ?? "";
+        return textLikeExtensions.has(ext);
+      });
+      const extracted = await Promise.all(
+        projectFiles.slice(0, 30).map(async (entry) => {
+          const content = await entry.async("string");
+          return `--- ${entry.name} ---\n${content.slice(0, 16_000)}`;
+        }),
+      );
+      return {
+        name: file.name,
+        type: file.type || extension,
+        size: file.size,
+        kind,
+        content: [`ZIP extraído: ${entries.length} arquivo(s).`, ...extracted].join("\n\n").slice(0, 120_000),
+      };
+    }
+
+    return new Promise<ChatAttachment>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error(`Não consegui ler ${file.name}`));
+      reader.onload = () => {
+        const raw = String(reader.result ?? "");
+        resolve({
+          name: file.name,
+          type: file.type || extension,
+          size: file.size,
+          kind,
+          content: kind === "image" ? raw : raw.slice(0, 120_000),
+        });
+      };
+      if (kind === "image") reader.readAsDataURL(file);
+      else reader.readAsText(file);
+    });
+  };
+
+  const handleAttachmentChange = async (filesList: FileList | null) => {
+    const selected = Array.from(filesList ?? []).slice(0, 6 - attachments.length);
+    if (selected.length === 0) return;
+    const oversized = selected.find((file) => file.size > 8_000_000);
+    if (oversized) {
+      toast.error(`${oversized.name} excede 8 MB.`);
+      return;
+    }
+    setReadingAttachments(true);
+    try {
+      const loaded = await Promise.all(selected.map(readAttachment));
+      setAttachments((current) => [...current, ...loaded].slice(0, 6));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não consegui anexar o arquivo.");
+    } finally {
+      setReadingAttachments(false);
+    }
+  };
+
+  const handleReviewPreview = async () => {
+    if (!hasFiles) return toast.error("Gere o site antes de pedir revisão visual.");
+    const iframeDoc = previewFrameRef.current?.contentDocument;
+    const target = iframeDoc?.documentElement;
+    let screenshot: ChatAttachment | undefined;
+
+    if (target) {
+      try {
+        const canvas = await html2canvas(target, {
+          backgroundColor: iframeDoc.body ? getComputedStyle(iframeDoc.body).backgroundColor : "#ffffff",
+          height: Math.min(target.scrollHeight, 2400),
+          useCORS: true,
+          width: target.clientWidth,
+          windowHeight: Math.min(target.scrollHeight, 2400),
+          windowWidth: target.clientWidth,
+        });
+        screenshot = {
+          name: `preview-${viewport}.png`,
+          type: "image/png",
+          size: 0,
+          kind: "image",
+          content: canvas.toDataURL("image/png"),
+        };
+      } catch {
+        toast.info("Não consegui capturar imagem do preview; vou analisar o HTML renderizado.");
+      }
+    }
+
+    sendMutation.mutate({
+      message: "Faça uma revisão visual automática do preview atual. Analise a captura de tela enviada e encontre problemas de layout, responsividade, contraste, hierarquia visual e acessibilidade. Se houver erro visual, corrija os arquivos completos.",
+      attachments: screenshot ? [screenshot] : undefined,
+      previewSnapshot: { viewport, html: previewDoc },
+    });
   };
 
   const handleWizardSubmit = () => {
@@ -281,7 +459,7 @@ function Workspace() {
 
     setWizardQuestions([]);
     setWizardAnswers({});
-    sendMutation.mutate(`${wizardPrompt}\n\nContexto obrigatório respondido pelo cliente:\n${context}`);
+    sendMutation.mutate({ message: `Prompt inicial do cliente:\n${wizardPrompt}\n\nPlan aprovado pelo cliente:\n${context}\n\nModo Build: gere agora os arquivos completos do site com base no prompt inicial e nas respostas acima.` });
   };
 
   const currentFile = files?.find((f) => f.path === activeFile) ?? files?.[0];
@@ -335,6 +513,9 @@ function Workspace() {
             </a>
           </Button>
         )}
+        <Button size="sm" variant="outline" onClick={() => setModelOpen(true)}>
+          <Brain className="size-3.5" /> {selectedModelOption.label}
+        </Button>
         <Button size="sm" variant="outline" onClick={() => setSkillsOpen(true)}>
           <Sparkles className="size-3.5" /> Skills
         </Button>
@@ -359,15 +540,28 @@ function Workspace() {
       <ResizablePanelGroup direction="horizontal" className="flex-1">
         <ResizablePanel defaultSize={32} minSize={22}>
           <div className="h-full flex flex-col bg-card/30">
-            <div className="px-4 py-3 border-b border-border text-sm font-semibold flex items-center gap-2">
-              <Sparkles className="size-4 text-primary" /> Chat com IA
+            <div className="px-4 py-3 border-b border-border text-sm font-semibold flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2"><Sparkles className="size-4 text-primary" /> Chat com IA</span>
+              <div className="flex rounded-full border border-border bg-background/60 p-0.5 text-[11px]">
+                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 ${mode === "plan" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>
+                  <Brain className="size-3" /> Plan
+                </span>
+                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 ${mode === "build" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>
+                  <Hammer className="size-3" /> Build
+                </span>
+              </div>
             </div>
             <div ref={scrollRef} className="flex-1 overflow-auto p-4 space-y-3">
-              {(!messages || messages.length === 0) && !streaming && (
+              {initialPrompt && (
+                <div className="rounded-lg border border-primary/30 bg-primary/10 p-4 text-sm">
+                  <div className="text-xs font-semibold text-primary mb-2">Prompt inicial</div>
+                  <p className="whitespace-pre-wrap">{initialPrompt}</p>
+                </div>
+              )}
+              {(!messages || messages.length === 0) && !streaming && !initialPrompt && (
                 <div className="rounded-lg border border-border bg-card p-4 text-sm">
                   <p className="text-muted-foreground">
-                    Olá! Me conte sobre o site que você quer. Vou te fazer perguntas para entender
-                    seu negócio e gerar o site.
+                    Comece com o prompt inicial do site. Depois disso, entro em Plan para fazer perguntas obrigatórias e só gero no Build.
                   </p>
                 </div>
               )}
@@ -402,10 +596,10 @@ function Workspace() {
               <div className="border-t border-border bg-background/60 p-3 space-y-3 max-h-[45vh] overflow-auto">
                 <div>
                   <div className="flex items-center gap-2 text-sm font-semibold">
-                    <CheckCircle2 className="size-4 text-primary" /> Perguntas obrigatórias
+                    <CheckCircle2 className="size-4 text-primary" /> Plan: perguntas obrigatórias
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Responda para o ForzaAI gerar com mais precisão e menos alucinações.
+                    Responda para liberar o Build e gerar o site com mais precisão.
                   </p>
                 </div>
                 {wizardQuestions.map((question, index) => (
@@ -441,11 +635,23 @@ function Workspace() {
                   onClick={handleWizardSubmit}
                   disabled={sendMutation.isPending}
                 >
-                  Continuar geração com minhas respostas
+                  <Hammer className="size-4" /> Build: gerar site
                 </Button>
               </div>
             )}
             <div className="p-3 border-t border-border">
+              {attachments.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-2">
+                  {attachments.map((attachment, index) => (
+                    <span key={`${attachment.name}-${index}`} className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-1 text-xs text-muted-foreground">
+                      <Paperclip className="size-3" /> {attachment.name}
+                      <button type="button" onClick={() => setAttachments((current) => current.filter((_, i) => i !== index))} className="ml-1 text-foreground hover:text-destructive">
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="relative">
                 <Textarea
                   value={input}
@@ -458,12 +664,28 @@ function Workspace() {
                   }}
                   placeholder={
                     wizardQuestions.length > 0
-                      ? "Responda o wizard obrigatório acima para continuar…"
-                      : "Descreva o que você quer no site…"
+                      ? "Responda o Plan obrigatório acima para liberar o Build…"
+                      : !hasFiles && (!messages || messages.length === 0) && !initialPrompt
+                        ? "Descreva o site que deseja criar…"
+                        : "Peça ajustes, envie prints de erro, imagens de referência, arquivos ou ZIP…"
                   }
-                  className="resize-none min-h-[80px] pr-12"
+                  className="resize-none min-h-[80px] pl-12 pr-12"
                   disabled={sendMutation.isPending || wizardMutation.isPending || wizardQuestions.length > 0}
                 />
+                <label className="absolute left-2 bottom-2 grid size-8 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground">
+                  {readingAttachments ? <Loader2 className="size-3.5 animate-spin" /> : <Paperclip className="size-3.5" />}
+                  <input
+                    type="file"
+                    multiple
+                    accept="image/*,.zip,.html,.css,.js,.ts,.tsx,.jsx,.json,.md,.txt,.csv,.xml,.svg,.yml,.yaml,.sql,.py"
+                    className="sr-only"
+                    onChange={(event) => {
+                      handleAttachmentChange(event.target.files);
+                      event.currentTarget.value = "";
+                    }}
+                    disabled={sendMutation.isPending || wizardMutation.isPending || wizardQuestions.length > 0 || readingAttachments}
+                  />
+                </label>
                 <Button
                   size="icon"
                   className="absolute right-2 bottom-2 size-8 bg-gradient-primary"
@@ -472,7 +694,8 @@ function Workspace() {
                     sendMutation.isPending ||
                     wizardMutation.isPending ||
                     wizardQuestions.length > 0 ||
-                    !input.trim()
+                    readingAttachments ||
+                    (!input.trim() && attachments.length === 0)
                   }
                 >
                   {sendMutation.isPending ? (
@@ -534,6 +757,15 @@ function Workspace() {
                 >
                   <RefreshCw className="size-3.5" />
                 </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleReviewPreview}
+                  disabled={!hasFiles || sendMutation.isPending}
+                  title="Analisar preview com IA"
+                >
+                  <Sparkles className="size-3.5" /> Revisar visual
+                </Button>
                 {project?.slug && (
                   <Button
                     size="icon"
@@ -558,6 +790,7 @@ function Workspace() {
                 {hasFiles ? (
                   <iframe
                     key={previewKey}
+                    ref={previewFrameRef}
                     sandbox="allow-scripts allow-same-origin"
                     referrerPolicy="no-referrer"
                     srcDoc={previewDoc}
@@ -618,6 +851,50 @@ function Workspace() {
           </Tabs>
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      <Dialog open={modelOpen} onOpenChange={setModelOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Modelo de IA deste projeto</DialogTitle>
+            <DialogDescription>
+              Escolha o modelo usado no Plan e no Build. Modelos Pro dependem de assinatura ativa.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            {modelOptions.map((model) => {
+              const locked = model.requiresSubscription && !hasSubscription;
+              const active = selectedModel === model.id;
+              return (
+                <button
+                  key={model.id}
+                  type="button"
+                  onClick={() => updateSelectedModel(model.id)}
+                  className={`rounded-xl border p-4 text-left transition ${
+                    active
+                      ? "border-primary bg-primary/10"
+                      : locked
+                        ? "border-border bg-muted/20 opacity-70"
+                        : "border-border bg-card hover:border-primary/50"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-medium flex items-center gap-2">
+                        {model.label}
+                        {locked && <Lock className="size-3.5 text-muted-foreground" />}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">{model.description}</div>
+                    </div>
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      {model.requiresSubscription ? "Pro" : "Free"}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={collabOpen} onOpenChange={setCollabOpen}>
         <DialogContent>

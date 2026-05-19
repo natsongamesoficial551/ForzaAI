@@ -28,14 +28,21 @@ export function getCreditMultiplier(level: ThoughtLevel = "light"): number {
 export function routeAiModel(opts: {
   hasSubscription: boolean;
   thoughtLevel?: ThoughtLevel;
+  modelId?: ForzaModelId;
   preferFast?: boolean;
 }): RoutedAiModel {
-  const thoughtLevel = opts.thoughtLevel ?? "light";
+  const requestedModel = opts.modelId ?? (opts.preferFast ? "forza-1-flash" : "forza-1-pro");
+  const thoughtLevel = opts.thoughtLevel ?? (requestedModel === "forza-2-5-thinking" ? "max" : requestedModel === "forza-2-pro" ? "high" : "light");
   const multiplier = getCreditMultiplier(thoughtLevel);
   const nvidiaKey = getOptionalServerEnv("NVIDIA_API_KEY");
   const deepSeekKey = getOptionalServerEnv("DEEPSEEK_API_KEY");
 
-  if (opts.preferFast && nvidiaKey) {
+  if ((requestedModel === "forza-2-pro" || requestedModel === "forza-2-5-thinking") && !opts.hasSubscription) {
+    throw new Error("Esse modelo é exclusivo para assinantes Pro.");
+  }
+
+  if (requestedModel === "forza-1-flash") {
+    if (!nvidiaKey) throw new Error("NVIDIA_API_KEY is not configured");
     return {
       id: "forza-1-flash",
       label: "Forza 1.0 Flash",
@@ -48,7 +55,9 @@ export function routeAiModel(opts: {
     };
   }
 
-  if (opts.hasSubscription && deepSeekKey && thoughtLevel === "high") {
+  if (!deepSeekKey) throw new Error("DEEPSEEK_API_KEY is not configured");
+
+  if (requestedModel === "forza-2-pro") {
     return {
       id: "forza-2-pro",
       label: "Forza 2.0 Pro",
@@ -61,7 +70,18 @@ export function routeAiModel(opts: {
     };
   }
 
-  if (!deepSeekKey) throw new Error("DEEPSEEK_API_KEY is not configured");
+  if (requestedModel === "forza-2-5-thinking") {
+    return {
+      id: "forza-2-5-thinking",
+      label: "Forza 2.5 Thinking",
+      provider: "deepseek",
+      endpoint: "https://api.deepseek.com/v1/chat/completions",
+      upstreamModel: "deepseek-reasoner",
+      apiKey: deepSeekKey,
+      creditMultiplier: multiplier,
+      requiresSubscription: true,
+    };
+  }
 
   return {
     id: "forza-1-pro",

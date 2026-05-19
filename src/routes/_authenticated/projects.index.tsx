@@ -1,12 +1,19 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { ExternalLink, Globe, Sparkles } from "lucide-react";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { ArrowUp, ExternalLink, Globe, Loader2, Sparkles } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/_authenticated/projects/")({ component: Projects });
 
 function Projects() {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const [prompt, setPrompt] = useState("");
+  const [launching, setLaunching] = useState(false);
+
   const { data: projects, isLoading, error } = useQuery({
     queryKey: ["projects"],
     retry: false,
@@ -20,18 +27,78 @@ function Projects() {
     },
   });
 
+  const handleCreateProject = async () => {
+    const p = prompt.trim();
+    if (p.length < 6) return toast.error("Descreva o projeto que você quer criar.");
+    setLaunching(true);
+    const guessedName = p.split(/[.,\n]/)[0].slice(0, 60) || "Novo site";
+    const { data, error } = await supabase.rpc("create_user_project", {
+      _name: guessedName,
+      _site_type: "landing-page",
+      _description: p,
+    });
+    setLaunching(false);
+    if (error || !data) {
+      toast.error(error?.message ?? "Não consegui criar o projeto");
+      return;
+    }
+    try {
+      sessionStorage.setItem(`initial-prompt:${data.id}`, p);
+    } catch {}
+    queryClient.invalidateQueries({ queryKey: ["projects"] });
+    setPrompt("");
+    router.navigate({ to: "/projects/$projectId", params: { projectId: data.id } });
+  };
+
   return (
     <div className="p-8 max-w-7xl mx-auto">
       <div className="flex items-end justify-between gap-4">
         <div>
           <h1 className="font-display text-3xl font-bold">Projetos</h1>
           <p className="text-muted-foreground mt-1">
-            Veja e abra os projetos criados. Para criar um novo, use o chat do Dashboard.
+            Veja, abra ou crie um projeto do zero sem passar pelo Dashboard.
           </p>
         </div>
-        <Button asChild className="bg-gradient-primary shadow-glow">
-          <Link to="/dashboard">Criar pelo chat</Link>
+        <Button asChild variant="outline">
+          <Link to="/dashboard">Ir para Dashboard</Link>
         </Button>
+      </div>
+
+      <div className="mt-8 rounded-[2rem] border border-border bg-gradient-to-br from-card via-card to-primary/5 p-5 md:p-8 shadow-elegant">
+        <div className="max-w-3xl">
+          <div className="inline-flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+            <Sparkles className="size-3.5 text-primary" /> Novo projeto
+          </div>
+          <h2 className="font-display text-2xl md:text-4xl font-semibold mt-3 tracking-tight">
+            Descreva o que quer construir
+          </h2>
+          <p className="text-sm text-muted-foreground mt-2">
+            O ForzaAI cria o projeto, abre o workspace e inicia o Plan automaticamente.
+          </p>
+        </div>
+        <div className="mt-6 relative rounded-3xl border border-border bg-background/80 focus-within:border-primary/60 focus-within:shadow-glow transition">
+          <textarea
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                if (!launching) handleCreateProject();
+              }
+            }}
+            placeholder="Ex: Quero um site institucional moderno para uma clínica odontológica em São Paulo…"
+            rows={4}
+            className="w-full resize-none bg-transparent px-5 py-5 pr-16 text-sm md:text-base outline-none placeholder:text-muted-foreground"
+          />
+          <Button
+            size="icon"
+            onClick={handleCreateProject}
+            disabled={launching || prompt.trim().length < 6}
+            className="absolute bottom-4 right-4 size-10 rounded-2xl bg-gradient-primary shadow-glow"
+          >
+            {launching ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+          </Button>
+        </div>
       </div>
 
       {error && (

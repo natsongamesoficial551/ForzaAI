@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { routeAiModel } from "./ai-model-router";
+import { type ForzaModelId, routeAiModel } from "./ai-model-router";
 import { getServerEnv } from "./server-env";
 
 const SYSTEM_PROMPT = `Você é o ForzaAI, um assistente especialista em criar sites profissionais para empresários brasileiros.
@@ -19,14 +19,33 @@ REGRAS CRÍTICAS:
 FORMATO OBRIGATÓRIO (apenas JSON, sem markdown):
 {"message":"texto para o usuário","files":[{"path":"index.html","language":"html","content":"..."},{"path":"styles.css","language":"css","content":"..."},{"path":"script.js","language":"javascript","content":"..."}]}`;
 
+const ModelSchema = z.enum(["forza-1-flash", "forza-1-pro", "forza-2-pro", "forza-2-5-thinking"]);
+
+const AttachmentSchema = z.object({
+  name: z.string().min(1).max(180),
+  type: z.string().max(120).optional(),
+  size: z.number().int().nonnegative().max(8_000_000),
+  kind: z.enum(["image", "zip", "text", "file"]),
+  content: z.string().max(120_000),
+});
+
 const InputSchema = z.object({
   projectId: z.string().uuid(),
-  message: z.string().min(1).max(4000),
+  message: z.string().min(1).max(12000),
+  modelId: ModelSchema.optional(),
+  attachments: z.array(AttachmentSchema).max(6).optional(),
+  previewSnapshot: z
+    .object({
+      viewport: z.enum(["desktop", "tablet", "mobile"]),
+      html: z.string().max(120_000),
+    })
+    .optional(),
 });
 
 const WizardInputSchema = z.object({
   projectId: z.string().uuid(),
   prompt: z.string().min(6).max(4000),
+  modelId: ModelSchema.optional(),
 });
 
 const WizardOutputSchema = z.object({
@@ -45,6 +64,8 @@ const WizardOutputSchema = z.object({
 });
 
 type WizardQuestion = z.infer<typeof WizardOutputSchema>["questions"][number];
+
+type ChatAttachment = z.infer<typeof AttachmentSchema>;
 
 type GeneratedFile = {
   path: "index.html" | "styles.css" | "script.js";
@@ -114,6 +135,27 @@ function normalizeWizard(raw: unknown): { shouldAsk: boolean; summary?: string; 
   };
 }
 
+function buildAttachmentContext(attachments: ChatAttachment[] | undefined) {
+  if (!attachments || attachments.length === 0) return "";
+  return attachments
+    .map((attachment, index) => {
+      const header = `ANEXO ${index + 1}: ${attachment.name}\nTipo: ${attachment.type || attachment.kind}\nTamanho: ${attachment.size} bytes`;
+      if (attachment.kind === "image") {
+        return `${header}\nImagem em base64/data URL para análise visual. Observe layout, erro visual, texto e componentes visíveis:\n${attachment.content}`;
+      }
+      if (attachment.kind === "zip") {
+        return `${header}\nArquivo ZIP recebido. Se o conteúdo for um projeto, use a listagem/resumo abaixo para inferir estrutura e peça arquivos específicos caso falte contexto:\n${attachment.content}`;
+      }
+      return `${header}\nConteúdo extraído para análise:\n${attachment.content}`;
+    })
+    .join("\n\n");
+}
+
+function buildPreviewContext(previewSnapshot: { viewport: "desktop" | "tablet" | "mobile"; html: string } | undefined) {
+  if (!previewSnapshot) return "";
+  return `REVISAO VISUAL DO PREVIEW (${previewSnapshot.viewport}):\nAnalise o documento renderizado abaixo como se estivesse revisando um print do site. Procure erros visuais prováveis, quebras responsivas, contraste ruim, espaçamentos estranhos, conteúdo cortado, CTAs fracos, problemas de acessibilidade e inconsistências. Se encontrar problemas, corrija nos arquivos completos.\n\n${previewSnapshot.html}`;
+}
+
 async function generateAndUploadImage(_opts: {
   prompt: string;
   projectId: string;
@@ -155,6 +197,15 @@ async function processImageTags(html: string, projectId: string, apiKey: string)
   });
 }
 
+async function hasActiveSubscription(supabase: any, userId: string) {
+  const { data } = await supabase.rpc("has_active_subscription", { _user_id: userId });
+  return !!data;
+}
+
+function selectedModelId(modelId: ForzaModelId | undefined) {
+  return modelId ?? "forza-1-flash";
+}
+
 async function loadActiveSkills(supabase: any, projectId: string) {
   const { data } = await supabase
     .from("project_skill_activations")
@@ -173,7 +224,8 @@ export const generateProjectWizard = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => WizardInputSchema.parse(input))
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
-    const model = routeAiModel({ hasSubscription: false });
+    const hasSubscription = await hasActiveSubscription(supabase, userId);
+    const model = routeAiModel({ hasSubscription, modelId: selectedModelId(data.modelId) });
 
     const { data: canEdit } = await supabase.rpc("can_edit_project", {
       _project_id: data.projectId,
@@ -240,7 +292,8 @@ export const sendChatMessage = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => InputSchema.parse(input))
   .handler(async function* ({ data, context }) {
     const { supabase, userId } = context;
-    const model = routeAiModel({ hasSubscription: false, preferFast: true });
+    const hasSubscription = await hasActiveSubscription(supabase, userId);
+    const model = routeAiModel({ hasSubscription, modelId: selectedModelId(data.modelId) });
 
     const { data: canEdit } = await supabase.rpc("can_edit_project", {
       _project_id: data.projectId,
@@ -280,6 +333,14 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       if (error) throw error;
       convo = created;
     }
+    const attachmentContext = buildAttachmentContext(data.attachments);
+    const previewContext = buildPreviewContext(data.previewSnapshot);
+    const enrichedMessage = [
+      data.message,
+      attachmentContext ? `\n\n${attachmentContext}` : "",
+      previewContext ? `\n\n${previewContext}` : "",
+    ].join("");
+
     await supabase.from("messages").insert({
       conversation_id: convo.id,
       role: "user",
@@ -301,6 +362,11 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       (currentFiles ?? []).map((f) => `--- ${f.path} ---\n${f.content}`).join("\n\n") ||
       "(sem arquivos ainda)";
     const skillsContext = await loadActiveSkills(supabase, data.projectId);
+    const currentTurn = {
+      role: "user" as const,
+      content: enrichedMessage,
+    };
+    const historyForModel = [...(history ?? []).slice(0, -1), currentTurn];
 
     yield { type: "status" as const, text: "Pensando…" };
 
@@ -321,7 +387,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
               SYSTEM_PROMPT +
               `\n\nProjeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}${skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${skillsContext}` : ""}\n\nArquivos atuais:\n${filesContext}`,
           },
-          ...(history ?? []).map((m) => ({
+          ...historyForModel.map((m) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
           })),
