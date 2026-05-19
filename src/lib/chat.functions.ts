@@ -121,6 +121,56 @@ function normalizeOutput(raw: unknown): { message: string; files: GeneratedFile[
   };
 }
 
+function stripGeneratedCode(text: string, language?: string) {
+  const trimmed = text.trim();
+  const langFence = language
+    ? trimmed.match(new RegExp("```" + language + "\\s*([\\s\\S]*?)```", "i"))
+    : null;
+  const anyFence = trimmed.match(/```[a-zA-Z0-9_-]*\s*([\s\S]*?)```/);
+  return (langFence?.[1] ?? anyFence?.[1] ?? trimmed).trim();
+}
+
+async function saveGeneratedFiles(supabase: any, projectId: string, files: GeneratedFile[]) {
+  for (const f of files) {
+    const { data: existing, error: lookupError } = await supabase
+      .from("project_files")
+      .select("id")
+      .eq("project_id", projectId)
+      .eq("path", f.path)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+
+    if (existing) {
+      const { error } = await supabase
+        .from("project_files")
+        .update({
+          content: f.content,
+          language: f.language,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existing.id);
+      if (error) throw error;
+    } else {
+      const { error } = await supabase.from("project_files").insert({
+        project_id: projectId,
+        path: f.path,
+        language: f.language,
+        content: f.content,
+      });
+      if (error) throw error;
+    }
+  }
+
+  const { error: projectUpdateErr } = await supabase
+    .from("projects")
+    .update({
+      status: "active",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", projectId);
+  if (projectUpdateErr) throw projectUpdateErr;
+}
+
 function normalizeWizard(raw: unknown): { shouldAsk: boolean; summary?: string; questions: WizardQuestion[] } {
   const parsed = WizardOutputSchema.parse(raw);
   const questions = parsed.questions.slice(0, 20).map((question, index) => ({
@@ -282,6 +332,107 @@ async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unkn
   if (upstream.status === 402) throw new Error("Créditos da DeepSeek esgotados.");
   if (upstream.status === 429) throw new Error("Limite da DeepSeek atingido. Aguarde alguns segundos.");
   throw new Error(`Falha na DeepSeek (${upstream.status}): ${errTxt.slice(0, 240)}`);
+}
+
+async function fetchAiText(model: RoutedAiModel, body: Record<string, unknown>) {
+  const upstream = await fetchAiCompletion(model, body);
+  const payload = await upstream.json();
+  const content = payload?.choices?.[0]?.message?.content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("A IA retornou uma resposta vazia. Tente novamente.");
+  }
+  return content;
+}
+
+async function generateReliableSiteFiles(opts: {
+  model: RoutedAiModel;
+  project: { name: string; site_type: string; description?: string | null };
+  userBrief: string;
+  filesContext: string;
+  skillsContext: string;
+  onStatus: (text: string) => void;
+}) {
+  const baseContext = `Projeto: ${opts.project.name} (${opts.project.site_type})\nDescrição: ${opts.project.description ?? "—"}${opts.skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${opts.skillsContext}` : ""}\n\nArquivos atuais:\n${opts.filesContext}\n\nPedido do usuário:\n${opts.userBrief}`;
+
+  opts.onStatus("Planejando estrutura do site…");
+  const plan = await fetchAiText(opts.model, {
+    stream: false,
+    temperature: 0.25,
+    messages: [
+      {
+        role: "system",
+        content:
+          "Você é o arquiteto de produto do ForzaAI. Crie um plano objetivo para uma landing page/site profissional nível Lovable: seções, visual, copy, CTAs, responsividade, acessibilidade e interações. Não gere código ainda. Responda em português, curto e acionável.",
+      },
+      { role: "user", content: baseContext },
+    ],
+  });
+
+  opts.onStatus("Gerando HTML semântico…");
+  let html = stripGeneratedCode(
+    await fetchAiText(opts.model, {
+      stream: false,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Gere APENAS o conteúdo completo de index.html, sem markdown. HTML5 completo, sem CSS inline, linkando styles.css e script.js. Mobile-first, SEO completo, acessível, copy em português do Brasil. Use até 4 imagens com <img data-ai-gen=\"prompt in English\" alt=\"...\" class=\"...\">.",
+        },
+        { role: "user", content: `${baseContext}\n\nPlano aprovado:\n${plan}` },
+      ],
+    }),
+    "html",
+  );
+
+  opts.onStatus("Gerando design visual…");
+  const css = stripGeneratedCode(
+    await fetchAiText(opts.model, {
+      stream: false,
+      temperature: 0.25,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Gere APENAS o conteúdo completo de styles.css, sem markdown. Design moderno, profissional, responsivo, com variáveis CSS, tipografia elegante via Google Fonts import, animações sutis, contraste acessível, layout refinado e nada genérico.",
+        },
+        { role: "user", content: `${baseContext}\n\nPlano:\n${plan}\n\nHTML:\n${html}` },
+      ],
+    }),
+    "css",
+  );
+
+  opts.onStatus("Gerando interações…");
+  const js = stripGeneratedCode(
+    await fetchAiText(opts.model, {
+      stream: false,
+      temperature: 0.15,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Gere APENAS o conteúdo completo de script.js, sem markdown. JavaScript puro e seguro para menu mobile, smooth scroll, validação de formulário, pequenos efeitos acessíveis. Não use dependências externas nem chaves/API secrets.",
+        },
+        { role: "user", content: `${baseContext}\n\nPlano:\n${plan}\n\nHTML:\n${html}` },
+      ],
+    }),
+    "javascript",
+  );
+
+  if (!/<html[\s>]/i.test(html)) {
+    html = `<!doctype html>\n<html lang="pt-BR">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${opts.project.name}</title>\n  <link rel="stylesheet" href="styles.css" />\n</head>\n<body>\n${html}\n  <script src="script.js"></script>\n</body>\n</html>`;
+  }
+  if (!/styles\.css/i.test(html)) html = html.replace(/<\/head>/i, '  <link rel="stylesheet" href="styles.css" />\n</head>');
+  if (!/script\.js/i.test(html)) html = html.replace(/<\/body>/i, '  <script src="script.js"></script>\n</body>');
+
+  return {
+    message: "Pronto — gerei seu site completo com HTML, CSS e JavaScript.",
+    files: [
+      { path: "index.html", language: "html", content: html },
+      { path: "styles.css", language: "css", content: css },
+      { path: "script.js", language: "javascript", content: js },
+    ] satisfies GeneratedFile[],
+  };
 }
 
 export const generateProjectWizard = createServerFn({ method: "POST" })
@@ -449,72 +600,76 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       hasPreviewSnapshot: Boolean(data.previewSnapshot),
     });
 
-    yield { type: "status" as const, text: `Chamando ${model.label} (${model.upstreamModel})…` };
+    const isBuildRequest = /Modo Build/i.test(data.message) || (!(currentFiles?.length) && /gere|crie|site|landing|portf[oó]lio|p[aá]gina/i.test(data.message));
+    let out: { message: string; files: GeneratedFile[] };
 
-    const upstream = await fetchAiCompletion(model, {
-      stream: false,
-      temperature: 0.3,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content:
-            SYSTEM_PROMPT +
-            `\n\nProjeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}${skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${skillsContext}` : ""}\n\nArquivos atuais:\n${filesContext}`,
+    if (isBuildRequest) {
+      yield { type: "status" as const, text: `Iniciando geração completa com ${model.label}…` };
+      out = await generateReliableSiteFiles({
+        model,
+        project,
+        userBrief: enrichedMessage,
+        filesContext,
+        skillsContext,
+        onStatus: (text) => {
+          logStage(text);
         },
-        ...historyForModel.map((m) => ({
-          role: m.role as "user" | "assistant",
-          content: m.content,
-        })),
-      ],
-    });
-
-    yield { type: "status" as const, text: "Resposta recebida, estruturando arquivos…" };
-    const payload = await upstream.json();
-    const buffer = payload?.choices?.[0]?.message?.content;
-    logStage("response-loaded", { chars: typeof buffer === "string" ? buffer.length : 0 });
-    if (typeof buffer !== "string") {
-      const fallback = "A IA retornou uma resposta inválida agora. Tente novamente em alguns segundos.";
-      await supabase.from("messages").insert({
-        conversation_id: convo.id,
-        role: "assistant",
-        content: fallback,
       });
-      yield { type: "done" as const, message: fallback, filesUpdated: 0 };
-      return;
-    }
-    yield { type: "progress" as const, chars: buffer.length };
-
-    let parsed: unknown;
-    try {
-      parsed = extractJson(buffer);
-    } catch (e) {
-      console.error("Falha ao parsear JSON da IA", e, buffer.slice(0, 400));
-      const fallback =
-        "Não consegui estruturar a resposta agora. Reformule a instrução de forma mais curta.";
-      await supabase.from("messages").insert({
-        conversation_id: convo.id,
-        role: "assistant",
-        content: fallback,
+      yield { type: "progress" as const, chars: out.files.reduce((sum, file) => sum + file.content.length, 0) };
+    } else {
+      yield { type: "status" as const, text: `Chamando ${model.label} (${model.upstreamModel})…` };
+      const upstream = await fetchAiCompletion(model, {
+        stream: false,
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              SYSTEM_PROMPT +
+              `\n\nProjeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}${skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${skillsContext}` : ""}\n\nArquivos atuais:\n${filesContext}`,
+          },
+          ...historyForModel.map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          })),
+        ],
       });
-      yield { type: "done" as const, message: fallback, filesUpdated: 0 };
-      return;
-    }
 
-    const out = normalizeOutput(parsed);
-    const requiresFiles = /Modo Build/i.test(data.message);
-    logStage("json-normalized", { files: out.files.length, requiresFiles });
+      yield { type: "status" as const, text: "Resposta recebida, estruturando arquivos…" };
+      const payload = await upstream.json();
+      const buffer = payload?.choices?.[0]?.message?.content;
+      logStage("response-loaded", { chars: typeof buffer === "string" ? buffer.length : 0 });
+      if (typeof buffer !== "string") {
+        const fallback = "A IA retornou uma resposta inválida agora. Tente novamente em alguns segundos.";
+        await supabase.from("messages").insert({
+          conversation_id: convo.id,
+          role: "assistant",
+          content: fallback,
+        });
+        yield { type: "done" as const, message: fallback, filesUpdated: 0 };
+        return;
+      }
+      yield { type: "progress" as const, chars: buffer.length };
 
-    if (requiresFiles && out.files.length === 0) {
-      const fallback =
-        "A IA respondeu, mas não enviou os arquivos do site. Clique em Build novamente ou escolha o Forza 1.0 Pro/2.5 Thinking para uma geração mais completa.";
-      await supabase.from("messages").insert({
-        conversation_id: convo.id,
-        role: "assistant",
-        content: fallback,
-      });
-      yield { type: "done" as const, message: fallback, filesUpdated: 0 };
-      return;
+      let parsed: unknown;
+      try {
+        parsed = extractJson(buffer);
+      } catch (e) {
+        console.error("Falha ao parsear JSON da IA", e, buffer.slice(0, 400));
+        const fallback =
+          "Não consegui estruturar a resposta agora. Reformule a instrução de forma mais curta.";
+        await supabase.from("messages").insert({
+          conversation_id: convo.id,
+          role: "assistant",
+          content: fallback,
+        });
+        yield { type: "done" as const, message: fallback, filesUpdated: 0 };
+        return;
+      }
+
+      out = normalizeOutput(parsed);
+      logStage("json-normalized", { files: out.files.length, isBuildRequest });
     }
 
     if (out.files.length > 0) {
@@ -541,41 +696,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
 
     if (out.files.length > 0) {
       yield { type: "status" as const, text: "Salvando arquivos…" };
-      for (const f of out.files) {
-        const { data: existing } = await supabase
-          .from("project_files")
-          .select("id")
-          .eq("project_id", data.projectId)
-          .eq("path", f.path)
-          .maybeSingle();
-        if (existing) {
-          const { error } = await supabase
-            .from("project_files")
-            .update({
-              content: f.content,
-              language: f.language,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", existing.id);
-          if (error) throw error;
-        } else {
-          const { error } = await supabase.from("project_files").insert({
-            project_id: data.projectId,
-            path: f.path,
-            language: f.language,
-            content: f.content,
-          });
-          if (error) throw error;
-        }
-      }
-      const { error: projectUpdateErr } = await supabase
-        .from("projects")
-        .update({
-          status: "active",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", data.projectId);
-      if (projectUpdateErr) throw projectUpdateErr;
+      await saveGeneratedFiles(supabase, data.projectId, out.files);
     }
 
     logStage("done", { filesUpdated: out.files.length });
