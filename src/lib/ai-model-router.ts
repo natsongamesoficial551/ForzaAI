@@ -6,7 +6,7 @@ export type ForzaModelId = "forza-1-flash" | "forza-1-pro" | "forza-2-pro" | "fo
 export type RoutedAiModel = {
   id: ForzaModelId;
   label: string;
-  provider: "nvidia" | "deepseek";
+  provider: "nvidia" | "deepseek" | "openrouter";
   endpoint: string;
   upstreamModel: string;
   apiKey: string;
@@ -35,14 +35,26 @@ export function routeAiModel(opts: {
   const thoughtLevel = opts.thoughtLevel ?? (requestedModel === "forza-2-5-thinking" ? "max" : requestedModel === "forza-2-pro" ? "high" : "light");
   const multiplier = getCreditMultiplier(thoughtLevel);
   const deepSeekKey = getOptionalServerEnv("DEEPSEEK_API_KEY");
+  const openRouterKey = getOptionalServerEnv("OPENROUTER_API_KEY");
 
   if ((requestedModel === "forza-2-pro" || requestedModel === "forza-2-5-thinking") && !opts.hasSubscription) {
     throw new Error("Esse modelo é exclusivo para assinantes Pro.");
   }
 
-  if (!deepSeekKey) throw new Error("DEEPSEEK_API_KEY is not configured");
-
   if (requestedModel === "forza-1-flash") {
+    if (openRouterKey) {
+      return {
+        id: "forza-1-flash",
+        label: "Forza 1.0 Flash",
+        provider: "openrouter",
+        endpoint: "https://openrouter.ai/api/v1/chat/completions",
+        upstreamModel: "deepseek/deepseek-v4-flash:free",
+        apiKey: openRouterKey,
+        creditMultiplier: multiplier,
+        requiresSubscription: false,
+      };
+    }
+    if (!deepSeekKey) throw new Error("OPENROUTER_API_KEY or DEEPSEEK_API_KEY is not configured");
     return {
       id: "forza-1-flash",
       label: "Forza 1.0 Flash",
@@ -54,6 +66,8 @@ export function routeAiModel(opts: {
       requiresSubscription: false,
     };
   }
+
+  if (!deepSeekKey) throw new Error("DEEPSEEK_API_KEY is not configured");
 
   if (requestedModel === "forza-2-pro") {
     return {

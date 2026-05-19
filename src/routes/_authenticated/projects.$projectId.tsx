@@ -227,6 +227,7 @@ function Workspace() {
           setStreaming((s) => ({ status: s?.status ?? "Gerando…", chars: chunk.chars }));
         } else if (chunk.type === "done") {
           result = { message: chunk.message, filesUpdated: chunk.filesUpdated };
+          setStreaming(null);
         }
       }
       return result;
@@ -471,15 +472,31 @@ function Workspace() {
 
   const previewDoc = useMemo(() => {
     const hasDoc = /<!doctype html>/i.test(html) || /<html[\s>]/i.test(html);
+    const previewGuard = `<script>
+document.addEventListener('click', function(event) {
+  const link = event.target.closest('a[href]');
+  if (!link) return;
+  const href = link.getAttribute('href') || '';
+  if (href.startsWith('#')) {
+    event.preventDefault();
+    document.querySelector(href)?.scrollIntoView({ behavior: 'smooth' });
+    return;
+  }
+  if (!href.startsWith('http://') && !href.startsWith('https://') && !href.startsWith('mailto:') && !href.startsWith('tel:')) {
+    event.preventDefault();
+  }
+});
+<\/script>`;
     if (hasDoc) {
       let doc = html;
+      if (!/<base\b/i.test(doc)) doc = doc.replace(/<head>/i, `<head><base href="about:srcdoc">`);
       if (css && !/<style/i.test(doc))
         doc = doc.replace(/<\/head>/i, `<style>${css}</style></head>`);
       if (js && !/<script/i.test(doc))
         doc = doc.replace(/<\/body>/i, `<script>${js}<\/script></body>`);
-      return doc;
+      return doc.replace(/<\/body>/i, `${previewGuard}</body>`);
     }
-    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body>${html}<script>${js}<\/script></body></html>`;
+    return `<!doctype html><html><head><base href="about:srcdoc"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body>${html}<script>${js}<\/script>${previewGuard}</body></html>`;
   }, [html, css, js]);
 
   const widths = { desktop: "100%", tablet: "768px", mobile: "390px" };

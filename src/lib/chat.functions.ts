@@ -246,7 +246,13 @@ export const generateProjectWizard = createServerFn({ method: "POST" })
 
     const upstream = await fetch(model.endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${model.apiKey}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${model.apiKey}`,
+        "Content-Type": "application/json",
+        ...(model.provider === "openrouter"
+          ? { "HTTP-Referer": "https://forzaai.netlify.app", "X-Title": "ForzaAI" }
+          : {}),
+      },
       body: JSON.stringify({
         model: model.upstreamModel,
         stream: false,
@@ -378,7 +384,13 @@ export const sendChatMessage = createServerFn({ method: "POST" })
 
     const upstream = await fetch(model.endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${model.apiKey}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${model.apiKey}`,
+        "Content-Type": "application/json",
+        ...(model.provider === "openrouter"
+          ? { "HTTP-Referer": "https://forzaai.netlify.app", "X-Title": "ForzaAI" }
+          : {}),
+      },
       body: JSON.stringify({
         model: model.upstreamModel,
         stream: false,
