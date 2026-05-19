@@ -27,9 +27,53 @@ function stripGeneratedCode(text, language) {
 
 function extractDelimitedFile(text, path) {
   const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`===\\s*${escaped}\\s*===\\s*([\\s\\S]*?)(?=\\n===\\s*(?:index\\.html|styles\\.css|script\\.js)\\s*===|$)`, "i");
+  const names = "index\\.html|styles\\.css|style\\.css|script\\.js|scripts\\.js|main\\.js|app\\.js";
+  const alias = path === "styles.css" ? "(?:styles|style)\\.css" : path === "script.js" ? "(?:script|scripts|main|app)\\.js" : escaped;
+  const re = new RegExp(`(?:^|\\n)\\s*(?:={3,}|---|###|##)?\\s*(?:file:?\\s*)?${alias}\\s*(?:={3,}|---)?\\s*\\n([\\s\\S]*?)(?=\\n\\s*(?:={3,}|---|###|##)?\\s*(?:file:?\\s*)?(?:${names})\\s*(?:={3,}|---)?\\s*\\n|$)`, "i");
   const language = path === "index.html" ? "html" : path === "styles.css" ? "css" : "javascript";
   return stripGeneratedCode(text.match(re)?.[1] ?? "", language).trim();
+}
+
+function extractFence(text, language) {
+  return String(text || "").match(new RegExp("```" + language + "\\s*([\\s\\S]*?)```", "i"))?.[1]?.trim() ?? "";
+}
+
+function normalizeGeneratedFiles(text, projectName) {
+  let html = extractDelimitedFile(text, "index.html");
+  let css = extractDelimitedFile(text, "styles.css");
+  let js = extractDelimitedFile(text, "script.js");
+
+  if (!html) html = extractFence(text, "html");
+  if (!css) css = extractFence(text, "css");
+  if (!js) js = extractFence(text, "(?:js|javascript)");
+
+  const fullHtml = String(text || "").match(/<!doctype html[\s\S]*?<\/html>/i)?.[0]
+    ?? String(text || "").match(/<html[\s\S]*?<\/html>/i)?.[0]
+    ?? "";
+  if (!html && fullHtml) html = fullHtml.trim();
+
+  if (html) {
+    if (!css) css = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((match) => match[1].trim()).join("\n\n");
+    if (!js) js = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1].trim()).filter((code) => code && !/application\/ld\+json/i.test(code)).join("\n\n");
+    if (css) html = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
+    if (js) html = html.replace(/<script(?![^>]*\bsrc=)[^>]*>[\s\S]*?<\/script>/gi, "");
+  }
+
+  if (!html || !/<(?:!doctype|html|head|body|main|section|div|header|nav|footer)\b/i.test(html)) return null;
+  if (!css) css = ":root{font-family:Inter,system-ui,sans-serif;color:#111827;background:#ffffff}body{margin:0}main{min-height:100vh}";
+  if (!js) js = "document.documentElement.classList.add('js-ready');";
+
+  if (!/<html[\s>]/i.test(html)) {
+    html = `<!doctype html>\n<html lang="pt-BR">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${projectName}</title>\n  <link rel="stylesheet" href="styles.css" />\n</head>\n<body>\n${html}\n  <script src="script.js"></script>\n</body>\n</html>`;
+  }
+  if (!/styles\.css/i.test(html)) html = html.replace(/<\/head>/i, '  <link rel="stylesheet" href="styles.css" />\n</head>');
+  if (!/script\.js/i.test(html)) html = html.replace(/<\/body>/i, '  <script src="script.js"></script>\n</body>');
+
+  return [
+    { path: "index.html", language: "html", content: html.trim() },
+    { path: "styles.css", language: "css", content: css.trim() },
+    { path: "script.js", language: "javascript", content: js.trim() },
+  ];
 }
 
 async function routeModel(supabase, modelId, hasSubscription) {
@@ -103,35 +147,35 @@ async function fetchAiText(model, body) {
 
 async function generateSiteFiles(model, project, userBrief, filesContext, skillsContext) {
   const baseContext = `Projeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}${skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${skillsContext}` : ""}\n\nArquivos atuais:\n${filesContext}\n\nPedido do usuário:\n${userBrief}`;
-  const content = await fetchAiText(model, {
+  const messages = [
+    {
+      role: "system",
+      content:
+        "Você é o ForzaAI, um gerador de sites profissional nível Lovable. Gere um site completo e bonito em UMA resposta. Retorne obrigatoriamente três arquivos, nesta ordem e sem texto extra fora dos arquivos:\n=== index.html ===\n<!doctype html>...\n=== styles.css ===\n...CSS...\n=== script.js ===\n...JS...\nO HTML deve linkar styles.css e script.js, ser mobile-first, semântico, com SEO, acessível e copy em português do Brasil. CSS refinado, moderno, responsivo, com variáveis e Google Fonts. JS puro, seguro e simples. Não faça perguntas em Build: escolha detalhes profissionais coerentes.",
+    },
+    { role: "user", content: baseContext },
+  ];
+
+  const content = await fetchAiText(model, { stream: false, temperature: 0.1, messages });
+  const parsed = normalizeGeneratedFiles(content, project.name);
+  if (parsed) return parsed;
+
+  const fixed = await fetchAiText(model, {
     stream: false,
-    temperature: 0.2,
+    temperature: 0,
     messages: [
+      ...messages,
+      { role: "assistant", content: content.slice(0, 120_000) },
       {
-        role: "system",
+        role: "user",
         content:
-          "Você é o ForzaAI, um gerador de sites profissional nível Lovable. Gere um site completo e bonito em UMA resposta, sem JSON e sem markdown. O formato obrigatório é exatamente:\n=== index.html ===\n...HTML completo...\n=== styles.css ===\n...CSS completo...\n=== script.js ===\n...JS completo...\nHTML deve linkar styles.css e script.js, ser mobile-first, semântico, com SEO, acessível e copy em português do Brasil. CSS deve ser refinado, moderno, responsivo, com variáveis e Google Fonts. JS deve ser puro, seguro e simples. Não faça perguntas em Build: escolha detalhes profissionais coerentes.",
+          "Reformate a resposta anterior agora. Não explique nada. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo",
       },
-      { role: "user", content: baseContext },
     ],
   });
-
-  let html = extractDelimitedFile(content, "index.html");
-  const css = extractDelimitedFile(content, "styles.css");
-  const js = extractDelimitedFile(content, "script.js");
-  if (!html || !css || !js) throw new Error("A IA não retornou os 3 arquivos no formato correto.");
-
-  if (!/<html[\s>]/i.test(html)) {
-    html = `<!doctype html>\n<html lang="pt-BR">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${project.name}</title>\n  <link rel="stylesheet" href="styles.css" />\n</head>\n<body>\n${html}\n  <script src="script.js"></script>\n</body>\n</html>`;
-  }
-  if (!/styles\.css/i.test(html)) html = html.replace(/<\/head>/i, '  <link rel="stylesheet" href="styles.css" />\n</head>');
-  if (!/script\.js/i.test(html)) html = html.replace(/<\/body>/i, '  <script src="script.js"></script>\n</body>');
-
-  return [
-    { path: "index.html", language: "html", content: html },
-    { path: "styles.css", language: "css", content: css },
-    { path: "script.js", language: "javascript", content: js },
-  ];
+  const repaired = normalizeGeneratedFiles(fixed, project.name);
+  if (!repaired) throw new Error("A IA não retornou HTML suficiente para montar o site. Tente novamente com Forza 1.0 Pro ou descreva o site com mais detalhes.");
+  return repaired;
 }
 
 async function saveFiles(supabase, projectId, files) {
