@@ -250,7 +250,7 @@ export const generateProjectWizard = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     const hasSubscription = await hasActiveSubscription(supabase, userId);
-    const model = routeAiModel({ hasSubscription, modelId: selectedModelId(data.modelId) });
+    const model = await routeAiModel({ hasSubscription, modelId: selectedModelId(data.modelId) });
 
     const { data: canEdit } = await supabase.rpc("can_edit_project", {
       _project_id: data.projectId,
@@ -308,7 +308,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
   .handler(async function* ({ data, context }) {
     const { supabase, userId } = context;
     const hasSubscription = await hasActiveSubscription(supabase, userId);
-    const model = routeAiModel({ hasSubscription, modelId: selectedModelId(data.modelId) });
+    const model = await routeAiModel({ hasSubscription, modelId: selectedModelId(data.modelId) });
 
     const { data: canEdit } = await supabase.rpc("can_edit_project", {
       _project_id: data.projectId,

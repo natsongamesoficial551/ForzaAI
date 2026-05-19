@@ -1,8 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useState } from "react";
-import { getAdminMetrics, checkIsAdmin } from "@/lib/admin.functions";
+import { toast } from "sonner";
+import { getAdminMetrics, checkIsAdmin, listAiProviderSettings, saveAiProviderSetting } from "@/lib/admin.functions";
 import {
   DollarSign,
   Users,
@@ -13,14 +14,34 @@ import {
   Zap,
   ShieldOff,
   Globe,
+  Brain,
+  Save,
 } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/admin")({ component: Admin });
 
+type AiProviderSetting = {
+  id?: string;
+  forzaModelId: string;
+  provider: string;
+  label: string;
+  endpoint: string;
+  upstreamModel: string;
+  apiKey?: string;
+  hasApiKey?: boolean;
+  requiresSubscription: boolean;
+  creditMultiplier: number;
+  isEnabled: boolean;
+};
+
 function Admin() {
   const metricsFn = useServerFn(getAdminMetrics);
   const adminFn = useServerFn(checkIsAdmin);
+  const listAiSettingsFn = useServerFn(listAiProviderSettings);
+  const saveAiSettingFn = useServerFn(saveAiProviderSetting);
+  const queryClient = useQueryClient();
   const [authorized, setAuthorized] = useState<boolean | null>(null);
+  const [aiSettingsDraft, setAiSettingsDraft] = useState<Record<string, AiProviderSetting>>({});
 
   useEffect(() => {
     adminFn({})
@@ -32,6 +53,33 @@ function Admin() {
     queryKey: ["admin-metrics"],
     enabled: authorized === true,
     queryFn: () => metricsFn({}),
+  });
+
+  const { data: aiSettings } = useQuery({
+    queryKey: ["admin-ai-provider-settings"],
+    enabled: authorized === true,
+    queryFn: () => listAiSettingsFn({}),
+  });
+
+  useEffect(() => {
+    if (!aiSettings) return;
+    setAiSettingsDraft(
+      Object.fromEntries(
+        aiSettings.map((setting: AiProviderSetting) => [
+          setting.forzaModelId,
+          { ...setting, apiKey: "" },
+        ]),
+      ),
+    );
+  }, [aiSettings]);
+
+  const saveAiMutation = useMutation({
+    mutationFn: (setting: AiProviderSetting) => saveAiSettingFn({ data: setting }),
+    onSuccess: () => {
+      toast.success("Configuração de IA salva");
+      queryClient.invalidateQueries({ queryKey: ["admin-ai-provider-settings"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   if (authorized === false) {
@@ -170,7 +218,162 @@ function Admin() {
           ))}
         </div>
       </div>
+
+      <div className="mt-6 p-6 rounded-xl border border-border bg-card">
+        <div className="flex items-start justify-between gap-4 mb-4">
+          <div>
+            <h3 className="font-display font-semibold flex items-center gap-2">
+              <Brain className="size-4 text-primary" /> Modelos de IA
+            </h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Configure apenas APIs oficiais/autorizadas. Assinaturas pessoais de app/ChatGPT/Codex não são API backend.
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-4">
+          {Object.values(aiSettingsDraft).map((setting) => (
+            <div key={setting.forzaModelId} className="rounded-xl border border-border bg-background/50 p-4">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <div className="font-medium">{setting.label}</div>
+                  <div className="text-xs text-muted-foreground">{setting.forzaModelId}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => saveAiMutation.mutate(setting)}
+                  disabled={saveAiMutation.isPending}
+                  className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-60"
+                >
+                  <Save className="size-3.5" /> Salvar
+                </button>
+              </div>
+              <div className="grid md:grid-cols-2 gap-3 text-sm">
+                <AdminField label="Nome">
+                  <input
+                    value={setting.label}
+                    onChange={(event) =>
+                      setAiSettingsDraft((current) => ({
+                        ...current,
+                        [setting.forzaModelId]: { ...setting, label: event.target.value },
+                      }))
+                    }
+                    className="w-full rounded-md border border-border bg-background px-3 py-2"
+                  />
+                </AdminField>
+                <AdminField label="Provider">
+                  <select
+                    value={setting.provider}
+                    onChange={(event) =>
+                      setAiSettingsDraft((current) => ({
+                        ...current,
+                        [setting.forzaModelId]: { ...setting, provider: event.target.value },
+                      }))
+                    }
+                    className="w-full rounded-md border border-border bg-background px-3 py-2"
+                  >
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="openai-compatible">OpenAI-compatible oficial</option>
+                  </select>
+                </AdminField>
+                <AdminField label="Endpoint">
+                  <input
+                    value={setting.endpoint}
+                    onChange={(event) =>
+                      setAiSettingsDraft((current) => ({
+                        ...current,
+                        [setting.forzaModelId]: { ...setting, endpoint: event.target.value },
+                      }))
+                    }
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+                  />
+                </AdminField>
+                <AdminField label="Modelo upstream">
+                  <input
+                    value={setting.upstreamModel}
+                    onChange={(event) =>
+                      setAiSettingsDraft((current) => ({
+                        ...current,
+                        [setting.forzaModelId]: { ...setting, upstreamModel: event.target.value },
+                      }))
+                    }
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+                  />
+                </AdminField>
+                <AdminField label={setting.hasApiKey ? "Nova API key (opcional)" : "API key"}>
+                  <input
+                    value={setting.apiKey ?? ""}
+                    onChange={(event) =>
+                      setAiSettingsDraft((current) => ({
+                        ...current,
+                        [setting.forzaModelId]: { ...setting, apiKey: event.target.value },
+                      }))
+                    }
+                    type="password"
+                    placeholder={setting.hasApiKey ? "Manter chave atual" : "Cole a chave oficial do provedor"}
+                    className="w-full rounded-md border border-border bg-background px-3 py-2"
+                  />
+                </AdminField>
+                <AdminField label="Multiplicador de créditos">
+                  <input
+                    value={setting.creditMultiplier}
+                    onChange={(event) =>
+                      setAiSettingsDraft((current) => ({
+                        ...current,
+                        [setting.forzaModelId]: { ...setting, creditMultiplier: Number(event.target.value) },
+                      }))
+                    }
+                    type="number"
+                    min="0.1"
+                    step="0.1"
+                    className="w-full rounded-md border border-border bg-background px-3 py-2"
+                  />
+                </AdminField>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-4 text-xs text-muted-foreground">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={setting.requiresSubscription}
+                    onChange={(event) =>
+                      setAiSettingsDraft((current) => ({
+                        ...current,
+                        [setting.forzaModelId]: { ...setting, requiresSubscription: event.target.checked },
+                      }))
+                    }
+                  />
+                  Requer assinatura Pro
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={setting.isEnabled}
+                    onChange={(event) =>
+                      setAiSettingsDraft((current) => ({
+                        ...current,
+                        [setting.forzaModelId]: { ...setting, isEnabled: event.target.checked },
+                      }))
+                    }
+                  />
+                  Ativo
+                </label>
+              </div>
+            </div>
+          ))}
+          {Object.keys(aiSettingsDraft).length === 0 && (
+            <div className="text-sm text-muted-foreground">Rode a migration de configurações de IA para carregar os modelos.</div>
+          )}
+        </div>
+      </div>
     </div>
+  );
+}
+
+function AdminField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="space-y-1">
+      <span className="block text-xs font-medium text-muted-foreground">{label}</span>
+      {children}
+    </label>
   );
 }
 

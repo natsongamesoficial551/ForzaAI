@@ -1,3 +1,4 @@
+import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { getOptionalServerEnv } from "./server-env";
 
 export type ThoughtLevel = "light" | "medium" | "high" | "max";
@@ -6,7 +7,7 @@ export type ForzaModelId = "forza-1-flash" | "forza-1-pro" | "forza-2-pro" | "fo
 export type RoutedAiModel = {
   id: ForzaModelId;
   label: string;
-  provider: "deepseek";
+  provider: "deepseek" | "openai-compatible";
   endpoint: string;
   upstreamModel: string;
   apiKey: string;
@@ -25,23 +26,11 @@ export function getCreditMultiplier(level: ThoughtLevel = "light"): number {
   return thoughtMultipliers[level];
 }
 
-export function routeAiModel(opts: {
-  hasSubscription: boolean;
-  thoughtLevel?: ThoughtLevel;
-  modelId?: ForzaModelId;
-  preferFast?: boolean;
-}): RoutedAiModel {
-  const requestedModel = opts.modelId ?? (opts.preferFast ? "forza-1-flash" : "forza-1-pro");
-  const thoughtLevel = opts.thoughtLevel ?? (requestedModel === "forza-2-5-thinking" ? "max" : requestedModel === "forza-2-pro" ? "high" : "light");
-  const multiplier = getCreditMultiplier(thoughtLevel);
-  const deepSeekKey = getOptionalServerEnv("DEEPSEEK_API_KEY");
-
-  if ((requestedModel === "forza-2-pro" || requestedModel === "forza-2-5-thinking") && !opts.hasSubscription) {
-    throw new Error("Esse modelo é exclusivo para assinantes Pro.");
-  }
-
-  if (!deepSeekKey) throw new Error("DEEPSEEK_API_KEY is not configured");
-
+function defaultDeepSeekModel(
+  requestedModel: ForzaModelId,
+  multiplier: number,
+  deepSeekKey: string,
+): RoutedAiModel {
   if (requestedModel === "forza-1-flash") {
     return {
       id: "forza-1-flash",
@@ -91,4 +80,47 @@ export function routeAiModel(opts: {
     creditMultiplier: multiplier,
     requiresSubscription: false,
   };
+}
+
+export async function routeAiModel(opts: {
+  hasSubscription: boolean;
+  thoughtLevel?: ThoughtLevel;
+  modelId?: ForzaModelId;
+  preferFast?: boolean;
+}): Promise<RoutedAiModel> {
+  const requestedModel = opts.modelId ?? (opts.preferFast ? "forza-1-flash" : "forza-1-pro");
+  const thoughtLevel = opts.thoughtLevel ?? (requestedModel === "forza-2-5-thinking" ? "max" : requestedModel === "forza-2-pro" ? "high" : "light");
+  const multiplier = getCreditMultiplier(thoughtLevel);
+  const deepSeekKey = getOptionalServerEnv("DEEPSEEK_API_KEY");
+
+  const { data: setting } = await supabaseAdmin
+    .from("ai_provider_settings")
+    .select("provider, label, endpoint, upstream_model, api_key, requires_subscription, credit_multiplier, is_enabled")
+    .eq("forza_model_id", requestedModel)
+    .eq("is_enabled", true)
+    .maybeSingle();
+
+  if (setting) {
+    if (setting.requires_subscription && !opts.hasSubscription) {
+      throw new Error("Esse modelo é exclusivo para assinantes Pro.");
+    }
+    const apiKey = setting.api_key || (setting.provider === "deepseek" ? deepSeekKey : null);
+    if (!apiKey) throw new Error(`API key não configurada para ${setting.label}.`);
+    return {
+      id: requestedModel,
+      label: setting.label,
+      provider: setting.provider === "deepseek" ? "deepseek" : "openai-compatible",
+      endpoint: setting.endpoint,
+      upstreamModel: setting.upstream_model,
+      apiKey,
+      creditMultiplier: Number(setting.credit_multiplier || multiplier),
+      requiresSubscription: setting.requires_subscription,
+    };
+  }
+
+  if ((requestedModel === "forza-2-pro" || requestedModel === "forza-2-5-thinking") && !opts.hasSubscription) {
+    throw new Error("Esse modelo é exclusivo para assinantes Pro.");
+  }
+  if (!deepSeekKey) throw new Error("DEEPSEEK_API_KEY is not configured");
+  return defaultDeepSeekModel(requestedModel, multiplier, deepSeekKey);
 }

@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
@@ -6,6 +7,21 @@ async function ensureAdmin(supabase: any, userId: string) {
   const { data, error } = await supabase.rpc("is_admin", { _user_id: userId });
   if (error || !data) throw new Error("Forbidden");
 }
+
+const ForzaModelSchema = z.enum(["forza-1-flash", "forza-1-pro", "forza-2-pro", "forza-2-5-thinking"]);
+
+const AiProviderSettingSchema = z.object({
+  id: z.string().uuid().optional(),
+  forzaModelId: ForzaModelSchema,
+  provider: z.string().min(1).max(60),
+  label: z.string().min(1).max(120),
+  endpoint: z.string().url().max(300),
+  upstreamModel: z.string().min(1).max(160),
+  apiKey: z.string().max(500).optional(),
+  requiresSubscription: z.boolean(),
+  creditMultiplier: z.number().positive().max(100),
+  isEnabled: z.boolean(),
+});
 
 export const getAdminMetrics = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -82,4 +98,58 @@ export const checkIsAdmin = createServerFn({ method: "POST" })
   .handler(async ({ context }) => {
     const { data } = await context.supabase.rpc("is_admin", { _user_id: context.userId });
     return { isAdmin: Boolean(data) };
+  });
+
+export const listAiProviderSettings = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await ensureAdmin(context.supabase, context.userId);
+
+    const { data, error } = await supabaseAdmin
+      .from("ai_provider_settings")
+      .select(
+        "id, forza_model_id, provider, label, endpoint, upstream_model, api_key, requires_subscription, credit_multiplier, is_enabled",
+      )
+      .order("forza_model_id");
+    if (error) throw error;
+
+    return (data ?? []).map((setting: any) => ({
+      id: setting.id,
+      forzaModelId: setting.forza_model_id,
+      provider: setting.provider,
+      label: setting.label,
+      endpoint: setting.endpoint,
+      upstreamModel: setting.upstream_model,
+      hasApiKey: Boolean(setting.api_key),
+      requiresSubscription: setting.requires_subscription,
+      creditMultiplier: Number(setting.credit_multiplier),
+      isEnabled: setting.is_enabled,
+    }));
+  });
+
+export const saveAiProviderSetting = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => AiProviderSettingSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    await ensureAdmin(context.supabase, context.userId);
+
+    const payload: Record<string, unknown> = {
+      forza_model_id: data.forzaModelId,
+      provider: data.provider.trim(),
+      label: data.label.trim(),
+      endpoint: data.endpoint.trim(),
+      upstream_model: data.upstreamModel.trim(),
+      requires_subscription: data.requiresSubscription,
+      credit_multiplier: data.creditMultiplier,
+      is_enabled: data.isEnabled,
+    };
+    const apiKey = data.apiKey?.trim();
+    if (apiKey) payload.api_key = apiKey;
+
+    const { error } = await supabaseAdmin.from("ai_provider_settings").upsert(payload, {
+      onConflict: "forza_model_id",
+    });
+    if (error) throw error;
+
+    return { ok: true };
   });
