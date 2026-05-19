@@ -419,6 +419,10 @@ function Workspace() {
       wizardMutation.mutate(text);
       return;
     }
+    if (messageAttachments.length === 0) {
+      startBuildJob(`Pedido de ajuste do usuário:\n${text}\n\nModo Build: atualize os arquivos existentes mantendo o site funcional e aplicando exatamente o ajuste pedido.`);
+      return;
+    }
     sendMutation.mutate({ message: text || "Analise os anexos enviados e sugira/corrija o site.", attachments: messageAttachments });
   };
 
