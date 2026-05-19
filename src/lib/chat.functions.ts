@@ -381,7 +381,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       headers: { Authorization: `Bearer ${model.apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: model.upstreamModel,
-        stream: true,
+        stream: false,
         temperature: 0.3,
         response_format: { type: "json_object" },
         messages: [
@@ -407,35 +407,19 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       throw new Error(`Falha na API da DeepSeek (${upstream.status}): ${errTxt.slice(0, 200)}`);
     }
 
-    let buffer = "";
-    let pending = "";
-    const decoder = new TextDecoderStream();
-    const reader = upstream.body.pipeThrough(decoder).getReader();
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      pending += value;
-      // Split on SSE event boundaries
-      const parts = pending.split("\n\n");
-      pending = parts.pop() ?? "";
-      for (const evt of parts) {
-        for (const line of evt.split("\n")) {
-          if (!line.startsWith("data:")) continue;
-          const payload = line.slice(5).trim();
-          if (!payload || payload === "[DONE]") continue;
-          try {
-            const parsed = JSON.parse(payload);
-            const delta: string | undefined = parsed?.choices?.[0]?.delta?.content;
-            if (delta) {
-              buffer += delta;
-              yield { type: "progress" as const, chars: buffer.length };
-            }
-          } catch {
-            /* ignore partial */
-          }
-        }
-      }
+    const payload = await upstream.json();
+    const buffer = payload?.choices?.[0]?.message?.content;
+    if (typeof buffer !== "string") {
+      const fallback = "A IA retornou uma resposta inválida agora. Tente novamente em alguns segundos.";
+      await supabase.from("messages").insert({
+        conversation_id: convo.id,
+        role: "assistant",
+        content: fallback,
+      });
+      yield { type: "done" as const, message: fallback, filesUpdated: 0 };
+      return;
     }
+    yield { type: "progress" as const, chars: buffer.length };
 
     let parsed: unknown;
     try {
