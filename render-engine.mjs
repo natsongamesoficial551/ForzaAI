@@ -42,10 +42,16 @@ const server = http.createServer(async (req, res) => {
       body,
     });
 
-    const response = await engineHandler(request);
-    const responseText = await response.text();
-    res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
-    res.end(responseText);
+    send(res, 202, { ok: true, accepted: true });
+
+    engineHandler(request)
+      .then(async (response) => {
+        const responseText = await response.text();
+        console.log(`[render engine] generation finished ${response.status}: ${responseText.slice(0, 300)}`);
+      })
+      .catch((error) => {
+        console.error("[render engine] generation failed", error);
+      });
   } catch (error) {
     console.error("[render engine] request failed", error);
     send(res, 500, { error: error instanceof Error ? error.message : String(error) });

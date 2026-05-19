@@ -451,14 +451,28 @@ export const startGenerationJob = createServerFn({ method: "POST" })
         : null;
     if (!backgroundUrl) throw new Error("URL do motor de geração não configurada.");
 
-    fetch(backgroundUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-generation-secret": engineSecret,
-      },
-      body: JSON.stringify({ jobId: job.id }),
-    }).catch((error) => console.error("[AI generation] background-start-error", error));
+    try {
+      const response = await fetch(backgroundUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-generation-secret": engineSecret,
+        },
+        body: JSON.stringify({ jobId: job.id }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(`Motor não aceitou o job (${response.status}): ${errorText.slice(0, 240)}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await supabase
+        .from("generation_jobs")
+        .update({ status: "failed", stage: "Falhou ao iniciar o motor", error: message, completed_at: new Date().toISOString() })
+        .eq("id", job.id);
+      throw new Error(`Falha ao iniciar o motor de geração: ${message}`);
+    }
 
     return job;
   });
