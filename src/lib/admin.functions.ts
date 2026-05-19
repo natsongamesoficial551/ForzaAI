@@ -133,11 +133,20 @@ export const saveAiProviderSetting = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     await ensureAdmin(context.supabase, context.userId);
 
+    const provider = data.provider.trim();
+    const endpoint = data.endpoint.trim();
+    if (provider === "deepseek" && !endpoint.includes("api.deepseek.com")) {
+      throw new Error("Provider DeepSeek precisa usar endpoint da DeepSeek. Para NVIDIA, selecione OpenAI-compatible oficial.");
+    }
+    if (provider !== "deepseek" && endpoint.includes("api.deepseek.com")) {
+      throw new Error("Endpoint da DeepSeek precisa usar provider DeepSeek.");
+    }
+
     const payload: Record<string, unknown> = {
       forza_model_id: data.forzaModelId,
-      provider: data.provider.trim(),
+      provider,
       label: data.label.trim(),
-      endpoint: data.endpoint.trim(),
+      endpoint,
       upstream_model: data.upstreamModel.trim(),
       requires_subscription: data.requiresSubscription,
       credit_multiplier: data.creditMultiplier,

@@ -111,13 +111,21 @@ async function routeModel(supabase, modelId, hasSubscription) {
 
   if (setting) {
     if (setting.requires_subscription && !hasSubscription) throw new Error("Esse modelo é exclusivo para assinantes Pro.");
-    const apiKey = setting.api_key || (setting.provider === "deepseek" ? deepSeekKey : null);
+    const provider = String(setting.provider || "").trim();
+    const endpoint = String(setting.endpoint || "").trim();
+    if (provider === "deepseek" && !endpoint.includes("api.deepseek.com")) {
+      throw new Error("Configuração inválida: provider DeepSeek está apontando para endpoint que não é da DeepSeek. Para NVIDIA, use provider OpenAI-compatible oficial.");
+    }
+    if (provider !== "deepseek" && endpoint.includes("api.deepseek.com")) {
+      throw new Error("Configuração inválida: endpoint da DeepSeek precisa usar provider DeepSeek.");
+    }
+    const apiKey = setting.api_key || (provider === "deepseek" ? deepSeekKey : null);
     if (!apiKey) throw new Error(`API key não configurada para ${setting.label}.`);
     return {
       id: requestedModel,
       label: setting.label,
-      provider: setting.provider,
-      endpoint: setting.endpoint,
+      provider,
+      endpoint,
       upstreamModel: setting.upstream_model,
       apiKey,
       creditMultiplier: Number(setting.credit_multiplier || 1),
@@ -164,7 +172,11 @@ async function fetchAiText(model, body) {
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`Falha no provedor (${response.status}): ${text.slice(0, 240)}`);
+    if (response.status === 401 || response.status === 403) throw new Error(`Falha de autenticação no provedor ${model.label}: confira a API key e o provider selecionado.`);
+    if (response.status === 402) throw new Error(`Créditos esgotados no provedor ${model.label}.`);
+    if (response.status === 404) throw new Error(`Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`);
+    if (response.status === 429) throw new Error(`Limite do provedor ${model.label} atingido. Aguarde alguns segundos ou use outro modelo.`);
+    throw new Error(`Falha no provedor ${model.label} (${response.status}): ${text.slice(0, 240)}`);
   }
 
   const payload = await response.json();

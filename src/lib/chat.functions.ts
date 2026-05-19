@@ -348,9 +348,11 @@ async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unkn
   if (upstream.ok) return upstream;
 
   const errTxt = await upstream.text().catch(() => "");
-  if (upstream.status === 402) throw new Error("Créditos da DeepSeek esgotados.");
-  if (upstream.status === 429) throw new Error("Limite da DeepSeek atingido. Aguarde alguns segundos.");
-  throw new Error(`Falha na DeepSeek (${upstream.status}): ${errTxt.slice(0, 240)}`);
+  if (upstream.status === 401 || upstream.status === 403) throw new Error(`Falha de autenticação no provedor ${model.label}: confira a API key e o provider selecionado.`);
+  if (upstream.status === 402) throw new Error(`Créditos esgotados no provedor ${model.label}.`);
+  if (upstream.status === 404) throw new Error(`Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`);
+  if (upstream.status === 429) throw new Error(`Limite do provedor ${model.label} atingido. Aguarde alguns segundos ou use outro modelo.`);
+  throw new Error(`Falha no provedor ${model.label} (${upstream.status}): ${errTxt.slice(0, 240)}`);
 }
 
 export async function fetchAiText(model: RoutedAiModel, body: Record<string, unknown>) {
