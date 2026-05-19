@@ -18,6 +18,9 @@ alter table public.generation_jobs enable row level security;
 create policy "users view own generation jobs" on public.generation_jobs
   for select using (user_id = auth.uid());
 
+create policy "users create own generation jobs" on public.generation_jobs
+  for insert with check (user_id = auth.uid());
+
 create policy "service role manages generation jobs" on public.generation_jobs
   for all using (auth.role() = 'service_role') with check (auth.role() = 'service_role');
 
