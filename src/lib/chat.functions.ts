@@ -775,29 +775,31 @@ export const generateProjectWizard = createServerFn({ method: "POST" })
 
     const fallbackClassification = classifyPromptLocally(data.prompt, project);
     let classification = fallbackClassification;
-    try {
-      const classificationText = await fetchAiText(model, {
-        stream: false,
-        temperature: 0.1,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              "Você é o classificador de intenção enterprise do ForzaAI. Classifique o pedido para guiar um motor de geração de sites/SaaS. Responda somente JSON com: shouldAsk boolean, projectKind enum landing_page|portfolio|ecommerce|saas|dashboard|internal_tool|other, complexity enum simple|standard|advanced|enterprise, summary curta, missingContext array. Não gere perguntas aqui.",
-          },
-          {
-            role: "user",
-            content: `Projeto: ${project.name}\nTipo atual: ${project.site_type}\nDescrição atual: ${project.description ?? "—"}\nPrompt inicial: ${data.prompt}`,
-          },
-        ],
-      });
-      classification = normalizeClassification(extractJson(classificationText), fallbackClassification);
-    } catch (error) {
-      console.warn("[wizard] classification fallback", error);
+    if (model.provider !== "openai-compatible") {
+      try {
+        const classificationText = await fetchAiText(model, {
+          stream: false,
+          temperature: 0.1,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content:
+                "Você é o classificador de intenção enterprise do ForzaAI. Classifique o pedido para guiar um motor de geração de sites/SaaS. Responda somente JSON com: shouldAsk boolean, projectKind enum landing_page|portfolio|ecommerce|saas|dashboard|internal_tool|other, complexity enum simple|standard|advanced|enterprise, summary curta, missingContext array. Não gere perguntas aqui.",
+            },
+            {
+              role: "user",
+              content: `Projeto: ${project.name}\nTipo atual: ${project.site_type}\nDescrição atual: ${project.description ?? "—"}\nPrompt inicial: ${data.prompt}`,
+            },
+          ],
+        });
+        classification = normalizeClassification(extractJson(classificationText), fallbackClassification);
+      } catch (error) {
+        console.warn("[wizard] classification fallback", error);
+      }
     }
 
-    if (!classification.shouldAsk) return { shouldAsk: false, summary: classification.summary, questions: [] };
+    classification = { ...classification, shouldAsk: true };
 
     const fallbackQuestions = contextualQuestions(classification.projectKind, classification.complexity, data.prompt);
     let wizard = normalizeWizard({ shouldAsk: true, summary: classification.summary, questions: fallbackQuestions });

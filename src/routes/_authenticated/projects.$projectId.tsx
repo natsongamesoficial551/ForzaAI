@@ -232,7 +232,7 @@ function Workspace() {
     mutationFn: async (prompt: string) => wizardFn({ data: { projectId, prompt, modelId: selectedModel } }),
     onSuccess: (wizard, prompt) => {
       if (!wizard.shouldAsk || wizard.questions.length === 0) {
-        startBuildJob(prompt);
+        toast.error("O Plan não conseguiu montar perguntas. Tente descrever o site com mais detalhes.");
         return;
       }
       setWizardPrompt(prompt);
@@ -634,11 +634,6 @@ function Workspace() {
     startBuildJob(`Prompt inicial do cliente:\n${wizardPrompt}\n\nPlan aprovado pelo cliente:\n${context}\n\nModo Build: gere agora os arquivos completos do site com base no prompt inicial e nas respostas acima.`);
   };
 
-  const handleSkipWizardBuild = () => {
-    clearWizard();
-    startBuildJob(`Prompt inicial do cliente:\n${wizardPrompt}\n\nModo Build direto: gere agora os arquivos completos do site com base no prompt inicial. Se faltar algum detalhe, use escolhas profissionais coerentes com o negócio em vez de fazer novas perguntas.`);
-  };
-
   const currentFile = files?.find((f) => f.path === activeFile) ?? files?.[0];
   const html = files?.find((f) => f.path === "index.html")?.content ?? "";
   const css = files?.find((f) => f.path === "styles.css")?.content ?? "";
@@ -878,26 +873,17 @@ document.addEventListener('click', function(event) {
                     placeholder="Ou escreva uma resposta personalizada para esta pergunta..."
                     className="min-h-16 resize-none text-xs"
                   />
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
-                      className="bg-gradient-primary shadow-glow"
-                      onClick={handleWizardNext}
-                      disabled={sendMutation.isPending || generationJobMutation.isPending || !!activeJobId}
-                    >
-                      {wizardStep === wizardQuestions.length - 1 ? (
-                        <><Hammer className="size-4" /> Gerar site</>
-                      ) : (
-                        <>Próxima</>
-                      )}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={handleSkipWizardBuild}
-                      disabled={sendMutation.isPending || generationJobMutation.isPending || !!activeJobId}
-                    >
-                      Pular e gerar direto
-                    </Button>
-                  </div>
+                  <Button
+                    className="w-full bg-gradient-primary shadow-glow"
+                    onClick={handleWizardNext}
+                    disabled={sendMutation.isPending || generationJobMutation.isPending || !!activeJobId}
+                  >
+                    {wizardStep === wizardQuestions.length - 1 ? (
+                      <><Hammer className="size-4" /> Gerar site</>
+                    ) : (
+                      <>Próxima</>
+                    )}
+                  </Button>
                 </div>
               </div>
             )}

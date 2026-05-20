@@ -364,17 +364,68 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
   return workingFiles;
 }
 
+function deterministicQualityReport(project, job, files) {
+  const byPath = Object.fromEntries(files.map((file) => [file.path, file.content || ""]));
+  const html = byPath["index.html"] || "";
+  const css = byPath["styles.css"] || "";
+  const js = byPath["script.js"] || "";
+  const combined = `${html}\n${css}\n${js}`;
+  const issues = [];
+
+  for (const path of ["index.html", "styles.css", "script.js"]) {
+    if (!byPath[path]?.trim()) issues.push(`Arquivo obrigatório ausente ou vazio: ${path}`);
+  }
+  if (html.length < 6000) issues.push("HTML curto demais para uma entrega premium completa.");
+  if (css.length < 2500) issues.push("CSS curto demais para layout responsivo e visual premium.");
+  if (!/@media\b/i.test(css)) issues.push("CSS não contém responsividade mínima com media queries.");
+  if (/ForzaAI\s*<\/h1>|Home\s*<\/button>|Dashboard\s*<\/button>|Templates\s*<\/button>|Analytics\s*<\/button>|Configurações\s*<\/button>/i.test(html)) {
+    issues.push("Preview parece scaffold genérico do ForzaAI, não o site solicitado.");
+  }
+  if (/TODO|lorem ipsum|placeholder|coming soon|em breve/i.test(combined)) issues.push("Arquivos contêm placeholders ou conteúdo incompleto.");
+  if (/eval\s*\(|service[_-]?role|api[_-]?key\s*=|sk-[a-z0-9]/i.test(combined)) issues.push("Arquivos contêm padrão inseguro ou possível segredo.");
+
+  const request = String(job.message || project.name || "").toLowerCase();
+  if (/portfolio|portfólio/.test(request)) {
+    const portfolioSignals = ["projeto", "case", "portfolio", "portfólio", "designer", "contato", "serviço"];
+    const found = portfolioSignals.filter((signal) => combined.toLowerCase().includes(signal)).length;
+    if (found < 4) issues.push("Portfólio não tem seções/conteúdo suficientes de designer, cases, serviços e contato.");
+  }
+  if (/saas|dashboard|app|sistema|crm|billing|pricing/.test(request)) {
+    const appSignals = ["dashboard", "onboarding", "settings", "configura", "pricing", "plano", "billing", "login"];
+    const found = appSignals.filter((signal) => combined.toLowerCase().includes(signal)).length;
+    if (found < 4) issues.push("SaaS/app não possui telas e fluxos suficientes além de uma home.");
+  }
+
+  return {
+    passed: issues.length === 0,
+    score: Math.max(0, 100 - issues.length * 15),
+    summary: issues.length === 0 ? "Quality gates determinísticos aprovados." : "Quality gates determinísticos reprovaram a geração.",
+    issues,
+  };
+}
+
 async function validateFiles(supabase, model, run, job, project, plans, files) {
   await setPhase(supabase, job.id, run.id, "validation", "Forza Engine: validando qualidade…");
+  const gateReport = deterministicQualityReport(project, job, files);
   const report = await fetchJson(model, [
     {
       role: "system",
       content: "Você é o revisor final do ForzaAI. Avalie se os arquivos cumprem o briefing e critérios de SaaS/site premium. Seja rigoroso com: não ser só home, responsividade, acessibilidade, copy BR, consistência visual, fluxos de SaaS, JS seguro e ausência de segredos/API keys/SQL no frontend. Responda somente JSON com: score 0-100, passed boolean, summary, issues, improvements, security_findings, missing_scope.",
     },
-    { role: "user", content: JSON.stringify({ project, request: job.message, plans, files: files.map((file) => ({ path: file.path, chars: file.content.length, preview: file.content.slice(0, 6000) })) }) },
+    { role: "user", content: JSON.stringify({ project, request: job.message, deterministic_gates: gateReport, plans, files: files.map((file) => ({ path: file.path, chars: file.content.length, preview: file.content.slice(0, 6000) })) }) },
   ], { score: 85, passed: true, summary: "Validação concluída.", issues: [], improvements: [] });
-  await saveArtifact(supabase, run.id, "validation_report", report);
-  return report;
+  const finalReport = {
+    ...report,
+    deterministic_gates: gateReport,
+    issues: [...(gateReport.issues || []), ...((Array.isArray(report.issues) ? report.issues : []))],
+  };
+  finalReport.score = Math.min(Number(report.score ?? 0), gateReport.score);
+  finalReport.passed = Boolean(report.passed) && gateReport.passed && finalReport.score >= 70;
+  await saveArtifact(supabase, run.id, "validation_report", finalReport);
+  if (!finalReport.passed) {
+    throw new Error(`A geração foi reprovada pelos quality gates (${finalReport.score}/100): ${finalReport.issues.slice(0, 4).join("; ")}`);
+  }
+  return finalReport;
 }
 
 async function saveFiles(supabase, projectId, files) {
