@@ -168,54 +168,81 @@ function describeFetchFailure(error) {
   return [message, cause].filter(Boolean).join(": ") || "erro de rede sem detalhe";
 }
 
-async function fetchAiText(model, body) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
-  let response;
-  try {
-    response = await fetch(model.endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${model.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      signal: controller.signal,
-      dispatcher: AI_FETCH_DISPATCHER,
-      body: JSON.stringify(normalizeAiRequestBody(model, body)),
-    });
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error(`O provedor ${model.label} demorou mais de ${Math.round(AI_REQUEST_TIMEOUT_MS / 1000)}s para responder. Esse modelo pode estar congestionado; use um modelo menor/mais rápido para gerar site completo.`);
-    }
-    throw new Error(`Falha de conexão com o provedor ${model.label} em ${model.endpoint}: ${describeFetchFailure(error)}. Confira endpoint, rede da hospedagem e se o modelo upstream "${model.upstreamModel}" existe na API.`);
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    if (response.status === 401 || response.status === 403) throw new Error(`Falha de autenticação no provedor ${model.label}: confira a API key e o provider selecionado.`);
-    if (response.status === 402) throw new Error(`Créditos esgotados no provedor ${model.label}.`);
-    if (response.status === 400) throw new Error(`Configuração inválida no provedor ${model.label}: confira endpoint, parâmetros e se o modelo upstream "${model.upstreamModel}" existe. Detalhe: ${text.slice(0, 240)}`);
-    if (response.status === 404) throw new Error(`Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`);
-    if (response.status === 429) throw new Error(`Limite do provedor ${model.label} atingido. Aguarde alguns segundos ou use outro modelo.`);
-    if (response.status === 502 || /bad gateway|<html/i.test(text)) throw new Error(`O provedor ${model.label} retornou gateway/instabilidade (${response.status}). Isso costuma ser falha upstream ou congestionamento do modelo "${model.upstreamModel}"; tente novamente ou use um modelo menor. Detalhe: ${text.replace(/\s+/g, " ").slice(0, 180)}`);
-    throw new Error(`Falha no provedor ${model.label} (${response.status}): ${text.slice(0, 240)}`);
-  }
-
-  const payload = await response.json();
-  const content = payload?.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.trim()) throw new Error("A IA retornou resposta vazia.");
-  return content;
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchJson(model, messages, fallback) {
+function retryAfterMs(response, fallbackMs) {
+  const value = response.headers.get("retry-after");
+  if (!value) return fallbackMs;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(5_000, Math.min(seconds * 1000, 180_000));
+  const dateMs = Date.parse(value);
+  if (Number.isFinite(dateMs)) return Math.max(5_000, Math.min(dateMs - Date.now(), 180_000));
+  return fallbackMs;
+}
+
+async function fetchAiText(model, body, context = {}) {
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(model.endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${model.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        dispatcher: AI_FETCH_DISPATCHER,
+        body: JSON.stringify(normalizeAiRequestBody(model, body)),
+      });
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        throw new Error(`O provedor ${model.label} demorou mais de ${Math.round(AI_REQUEST_TIMEOUT_MS / 1000)}s para responder. Esse modelo pode estar congestionado; use um modelo menor/mais rápido para gerar site completo.`);
+      }
+      throw new Error(`Falha de conexão com o provedor ${model.label} em ${model.endpoint}: ${describeFetchFailure(error)}. Confira endpoint, rede da hospedagem e se o modelo upstream "${model.upstreamModel}" existe na API.`);
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (response.status === 429 && attempt < maxAttempts) {
+      const waitMs = retryAfterMs(response, attempt * 30_000);
+      await updateJob(context.supabase, context.jobId, {
+        stage: `Forza Engine: limite do provedor atingido; aguardando ${Math.round(waitMs / 1000)}s antes de tentar novamente (${attempt}/${maxAttempts - 1})…`,
+      });
+      await sleep(waitMs);
+      continue;
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      if (response.status === 401 || response.status === 403) throw new Error(`Falha de autenticação no provedor ${model.label}: confira a API key e o provider selecionado.`);
+      if (response.status === 402) throw new Error(`Créditos esgotados no provedor ${model.label}.`);
+      if (response.status === 400) throw new Error(`Configuração inválida no provedor ${model.label}: confira endpoint, parâmetros e se o modelo upstream "${model.upstreamModel}" existe. Detalhe: ${text.slice(0, 240)}`);
+      if (response.status === 404) throw new Error(`Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`);
+      if (response.status === 429) throw new Error(`Limite do provedor ${model.label} atingido mesmo após ${maxAttempts - 1} tentativas. Aguarde alguns minutos ou use outro modelo.`);
+      if (response.status === 502 || /bad gateway|<html/i.test(text)) throw new Error(`O provedor ${model.label} retornou gateway/instabilidade (${response.status}). Isso costuma ser falha upstream ou congestionamento do modelo "${model.upstreamModel}"; tente novamente ou use um modelo menor. Detalhe: ${text.replace(/\s+/g, " ").slice(0, 180)}`);
+      throw new Error(`Falha no provedor ${model.label} (${response.status}): ${text.slice(0, 240)}`);
+    }
+
+    const payload = await response.json();
+    const content = payload?.choices?.[0]?.message?.content;
+    if (typeof content !== "string" || !content.trim()) throw new Error("A IA retornou resposta vazia.");
+    return content;
+  }
+  throw new Error(`Limite do provedor ${model.label} atingido. Aguarde alguns minutos ou use outro modelo.`);
+}
+
+async function fetchJson(model, messages, fallback, context = {}) {
   const content = await fetchAiText(model, {
     stream: false,
     temperature: 0.1,
     response_format: { type: "json_object" },
     messages,
-  });
+  }, context);
   try {
     return extractJson(content);
   } catch (error) {
@@ -279,7 +306,7 @@ async function buildPlans(supabase, model, run, project, job, currentFiles, skil
     pages: ["Home", "Dashboard", "Login", "Pricing", "Settings"],
     features: ["Navegação", "Hero", "Dashboard", "Planos", "CTA"],
     quality_criteria: ["Responsivo", "Acessível", "Visual profissional", "Fluxos claros"],
-  });
+  }, { supabase, jobId: job.id });
   await saveArtifact(supabase, run.id, "product_plan", productPlan);
 
   await setPhase(supabase, job.id, run.id, "technical_plan", "Forza Engine: desenhando arquitetura técnica…");
@@ -293,7 +320,7 @@ async function buildPlans(supabase, model, run, project, job, currentFiles, skil
     file_strategy: "Gerar HTML/CSS/JS completos e coesos.",
     sections: ["Landing", "Dashboard mockado", "Auth mockado", "Pricing", "Settings"],
     interactions: ["Navegação", "Tabs", "Formulários mockados"],
-  });
+  }, { supabase, jobId: job.id });
   await saveArtifact(supabase, run.id, "technical_plan", technicalPlan);
 
   await supabase.from("engine_runs").update({ plan: { brief, productPlan, technicalPlan } }).eq("id", run.id);
@@ -319,7 +346,7 @@ async function createImplementationTasks(supabase, model, run, job, plans) {
       content: "Quebre a implementação em 4 a 6 tasks pequenas para gerar um SaaS/site completo no editor atual. Responda somente JSON: {\"tasks\":[{\"title\":\"...\",\"description\":\"...\"}]}",
     },
     { role: "user", content: JSON.stringify(plans) },
-  ], { tasks: defaultTasks(plans.productPlan, plans.technicalPlan) });
+  ], { tasks: defaultTasks(plans.productPlan, plans.technicalPlan) }, { supabase, jobId: job.id });
   const rawTasks = Array.isArray(taskPlan.tasks) && taskPlan.tasks.length >= 3 ? taskPlan.tasks : defaultTasks(plans.productPlan, plans.technicalPlan);
   const tasks = rawTasks.slice(0, 6).map((task, index) => ({
     title: String(task.title || `Task ${index + 1}`).slice(0, 120),
@@ -353,7 +380,7 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
           content: `Projeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${skillsContext || "—"}\nPlanos:\n${JSON.stringify(plans)}\n\nTask atual: ${task.title}\n${task.description}\n\nArquivos atuais de trabalho:\n${filesContext(workingFiles)}`,
         },
       ],
-    });
+    }, { supabase, jobId: job.id });
     const parsed = normalizeGeneratedFiles(content, project.name);
     await saveArtifact(supabase, run.id, "model_raw_output", { taskId: task.id, title: task.title, content: content.slice(0, 120_000) });
     if (!parsed) {
@@ -420,7 +447,7 @@ async function validateFiles(supabase, model, run, job, project, plans, files) {
       content: "Você é o revisor final do ForzaAI. Avalie se os arquivos cumprem o briefing e critérios de SaaS/site premium. Seja rigoroso com: não ser só home, responsividade, acessibilidade, copy BR, consistência visual, fluxos de SaaS, JS seguro e ausência de segredos/API keys/SQL no frontend. Responda somente JSON com: score 0-100, passed boolean, summary, issues, improvements, security_findings, missing_scope.",
     },
     { role: "user", content: JSON.stringify({ project, request: job.message, deterministic_gates: gateReport, plans, files: files.map((file) => ({ path: file.path, chars: file.content.length, preview: file.content.slice(0, 6000) })) }) },
-  ], { score: 85, passed: true, summary: "Validação concluída.", issues: [], improvements: [] });
+  ], { score: 85, passed: true, summary: "Validação concluída.", issues: [], improvements: [] }, { supabase, jobId: job.id });
   const finalReport = {
     ...report,
     deterministic_gates: gateReport,
