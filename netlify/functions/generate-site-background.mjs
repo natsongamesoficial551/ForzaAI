@@ -156,6 +156,12 @@ function normalizeAiRequestBody(model, body) {
   return requestBody;
 }
 
+function describeFetchFailure(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : "";
+  return [message, cause].filter(Boolean).join(": ") || "erro de rede sem detalhe";
+}
+
 async function fetchAiText(model, body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
@@ -174,7 +180,7 @@ async function fetchAiText(model, body) {
     if (error?.name === "AbortError") {
       throw new Error(`O provedor ${model.label} demorou mais de ${Math.round(AI_REQUEST_TIMEOUT_MS / 1000)}s para responder. Esse modelo pode estar congestionado; use um modelo menor/mais rápido para gerar site completo.`);
     }
-    throw error;
+    throw new Error(`Falha de conexão com o provedor ${model.label} em ${model.endpoint}: ${describeFetchFailure(error)}. Confira endpoint, rede da hospedagem e se o modelo upstream "${model.upstreamModel}" existe na API.`);
   } finally {
     clearTimeout(timeout);
   }
@@ -183,6 +189,7 @@ async function fetchAiText(model, body) {
     const text = await response.text().catch(() => "");
     if (response.status === 401 || response.status === 403) throw new Error(`Falha de autenticação no provedor ${model.label}: confira a API key e o provider selecionado.`);
     if (response.status === 402) throw new Error(`Créditos esgotados no provedor ${model.label}.`);
+    if (response.status === 400) throw new Error(`Configuração inválida no provedor ${model.label}: confira endpoint, parâmetros e se o modelo upstream "${model.upstreamModel}" existe. Detalhe: ${text.slice(0, 240)}`);
     if (response.status === 404) throw new Error(`Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`);
     if (response.status === 429) throw new Error(`Limite do provedor ${model.label} atingido. Aguarde alguns segundos ou use outro modelo.`);
     throw new Error(`Falha no provedor ${model.label} (${response.status}): ${text.slice(0, 240)}`);

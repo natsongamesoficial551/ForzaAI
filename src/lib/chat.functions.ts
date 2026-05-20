@@ -435,6 +435,13 @@ function normalizeAiRequestBody(model: RoutedAiModel, body: Record<string, unkno
   return requestBody;
 }
 
+function describeFetchFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : "";
+  const detail = [message, cause].filter(Boolean).join(": ");
+  return detail || "erro de rede sem detalhe";
+}
+
 async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unknown>) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
@@ -465,7 +472,7 @@ async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unkn
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("A IA demorou demais para responder. Em produção, requests longas podem ser encerradas pela hospedagem; tente novamente ou escolha um modelo mais rápido.");
     }
-    throw error;
+    throw new Error(`Falha de conexão com o provedor ${model.label} em ${model.endpoint}: ${describeFetchFailure(error)}. Confira endpoint, rede da hospedagem e se o modelo upstream "${model.upstreamModel}" existe na API.`);
   } finally {
     clearTimeout(timeout);
   }
@@ -483,6 +490,7 @@ async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unkn
   const errTxt = await upstream.text().catch(() => "");
   if (upstream.status === 401 || upstream.status === 403) throw new Error(`Falha de autenticação no provedor ${model.label}: confira a API key e o provider selecionado.`);
   if (upstream.status === 402) throw new Error(`Créditos esgotados no provedor ${model.label}.`);
+  if (upstream.status === 400) throw new Error(`Configuração inválida no provedor ${model.label}: confira endpoint, parâmetros e se o modelo upstream "${model.upstreamModel}" existe. Detalhe: ${errTxt.slice(0, 240)}`);
   if (upstream.status === 404) throw new Error(`Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`);
   if (upstream.status === 429) throw new Error(`Limite do provedor ${model.label} atingido. Aguarde alguns segundos ou use outro modelo.`);
   throw new Error(`Falha no provedor ${model.label} (${upstream.status}): ${errTxt.slice(0, 240)}`);
