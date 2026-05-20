@@ -325,6 +325,10 @@ export async function saveGeneratedFiles(supabase: any, projectId: string, files
   if (projectUpdateErr) throw projectUpdateErr;
 }
 
+function isCustomWizardOption(value: string | undefined) {
+  return !!value && /^(outros?|outra|personalizado|personalizada)/i.test(value.trim());
+}
+
 function normalizeWizard(raw: unknown): { shouldAsk: boolean; summary?: string; questions: WizardQuestion[] } {
   const parsed = WizardOutputSchema.parse(raw);
   const questions = parsed.questions
