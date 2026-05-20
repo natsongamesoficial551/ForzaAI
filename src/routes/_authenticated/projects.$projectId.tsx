@@ -92,6 +92,16 @@ type ProjectFileVersion = {
 
 const textLikeExtensions = new Set(["html", "css", "js", "ts", "tsx", "jsx", "json", "md", "txt", "csv", "xml", "svg", "yml", "yaml", "sql", "py"]);
 
+function readableError(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error);
+  try {
+    const parsed = JSON.parse(raw) as { errorMessage?: string; message?: string; error?: string };
+    return parsed.errorMessage || parsed.message || parsed.error || raw;
+  } catch {
+    return raw;
+  }
+}
+
 const modelOptions: Array<{ id: ForzaModelId; label: string; description: string; requiresSubscription: boolean }> = [
   { id: "forza-1-flash", label: "Forza 1.0 Flash", description: "Rápido e econômico", requiresSubscription: false },
   { id: "forza-1-pro", label: "Forza 1.0 Pro", description: "Mais qualidade no plano free", requiresSubscription: false },
@@ -232,7 +242,7 @@ function Workspace() {
       setWizardCustomAnswers({});
       toast.info("Responda o wizard para melhorar a geração.");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => toast.error(readableError(e)),
   });
 
   const startBuildJob = (message: string) => {
@@ -252,7 +262,7 @@ function Workspace() {
     },
     onError: (e: Error) => {
       setStreaming(null);
-      toast.error(e.message);
+      toast.error(readableError(e));
     },
   });
 
@@ -321,11 +331,14 @@ function Workspace() {
         try {
           stream = await sendFn({ data: { projectId, message, modelId: selectedModel, attachments: messageAttachments, previewSnapshot } });
         } catch (error) {
-          const raw = error instanceof Error ? error.message : String(error);
-          if (/502|Bad Gateway|unknown error|errorType/i.test(raw)) {
-            throw new Error("A geração falhou no servidor da hospedagem. Tente novamente; se repetir, use Forza 1.0 Pro ou reduza o prompt.");
+          const raw = readableError(error);
+          if (/502|Bad Gateway/i.test(raw)) {
+            throw new Error("O provedor/modelo retornou gateway ou instabilidade. Tente novamente; se repetir, use um modelo menor no Admin.");
           }
-          throw error;
+          if (/unknown error|errorType/i.test(raw)) {
+            throw new Error(`A geração falhou sem detalhe do servidor. Detalhe bruto: ${raw}`);
+          }
+          throw new Error(raw);
         }
         let result = { message: "", filesUpdated: 0 };
         for await (const chunk of stream) {
@@ -356,7 +369,7 @@ function Workspace() {
     },
     onError: (e: Error) => {
       setStreaming(null);
-      toast.error(e.message);
+      toast.error(readableError(e));
     },
   });
 
@@ -368,7 +381,7 @@ function Workspace() {
       setPreviewKey((k) => k + 1);
       toast.success(`${res.filesUpdated} arquivo(s) restaurado(s)`);
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => toast.error(readableError(e)),
   });
 
   const publishMutation = useMutation({
@@ -379,7 +392,7 @@ function Workspace() {
       setPublishOpen(true);
       toast.success("Site publicado!");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => toast.error(readableError(e)),
   });
 
   const inviteMutation = useMutation({
@@ -390,7 +403,7 @@ function Workspace() {
       qc.invalidateQueries({ queryKey: ["collaborators", projectId] });
       toast.success("Colaborador adicionado");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => toast.error(readableError(e)),
   });
 
   const removeCollaboratorMutation = useMutation({
@@ -400,14 +413,14 @@ function Workspace() {
       qc.invalidateQueries({ queryKey: ["collaborators", projectId] });
       toast.success("Colaborador removido");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => toast.error(readableError(e)),
   });
 
   const toggleSkillMutation = useMutation({
     mutationFn: async ({ skillId, active }: { skillId: string; active: boolean }) =>
       toggleProjectSkillFn({ data: { projectId, skillId, active } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["project-skills", projectId] }),
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => toast.error(readableError(e)),
   });
 
   useEffect(() => {

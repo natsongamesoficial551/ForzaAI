@@ -801,27 +801,29 @@ export const generateProjectWizard = createServerFn({ method: "POST" })
 
     const fallbackQuestions = contextualQuestions(classification.projectKind, classification.complexity, data.prompt);
     let wizard = normalizeWizard({ shouldAsk: true, summary: classification.summary, questions: fallbackQuestions });
-    try {
-      const questionsText = await fetchAiText(model, {
-        stream: false,
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              "Você é o wizard anti-burro do ForzaAI. Gere perguntas múltipla escolha altamente específicas para o tipo de projeto. Faça poucas perguntas, mas cada uma deve influenciar diretamente produto, UX, backend, banco, integrações ou copy. Nunca pergunte coisas genéricas sem impacto. Responda somente JSON: {\"shouldAsk\":true,\"summary\":\"...\",\"questions\":[{\"id\":\"q1\",\"question\":\"...\",\"options\":[\"...\"]}]}. Gere de 5 a 9 perguntas, cada uma com 2 a 5 opções curtas.",
-          },
-          {
-            role: "user",
-            content: JSON.stringify({ project, prompt: data.prompt, classification, fallbackQuestions }),
-          },
-        ],
-      });
-      wizard = normalizeWizard(extractJson(questionsText));
-      if (wizard.questions.length < 4) wizard = normalizeWizard({ shouldAsk: true, summary: classification.summary, questions: fallbackQuestions });
-    } catch (error) {
-      console.warn("[wizard] contextual questions fallback", error);
+    if (model.provider !== "openai-compatible") {
+      try {
+        const questionsText = await fetchAiText(model, {
+          stream: false,
+          temperature: 0.2,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content:
+                "Você é o wizard anti-burro do ForzaAI. Gere perguntas múltipla escolha altamente específicas para o tipo de projeto. Faça poucas perguntas, mas cada uma deve influenciar diretamente produto, UX, backend, banco, integrações ou copy. Nunca pergunte coisas genéricas sem impacto. Responda somente JSON: {\"shouldAsk\":true,\"summary\":\"...\",\"questions\":[{\"id\":\"q1\",\"question\":\"...\",\"options\":[\"...\"]}]}. Gere de 5 a 9 perguntas, cada uma com 4 opções curtas.",
+            },
+            {
+              role: "user",
+              content: JSON.stringify({ project, prompt: data.prompt, classification, fallbackQuestions }),
+            },
+          ],
+        });
+        const modelWizard = normalizeWizard(extractJson(questionsText));
+        if (modelWizard.questions.length >= 4) wizard = modelWizard;
+      } catch (error) {
+        console.warn("[wizard] contextual questions fallback", error);
+      }
     }
 
     if (wizard.shouldAsk) {
