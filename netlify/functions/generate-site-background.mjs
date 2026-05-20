@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 
-const AI_REQUEST_TIMEOUT_MS = 600_000;
+const AI_REQUEST_TIMEOUT_MS = 7_200_000;
 const MODEL_IDS = new Set(["forza-1-flash", "forza-1-pro", "forza-2-pro", "forza-2-5-thinking"]);
 
 const json = (status, body) => new Response(JSON.stringify(body), {
@@ -192,6 +192,7 @@ async function fetchAiText(model, body) {
     if (response.status === 400) throw new Error(`Configuração inválida no provedor ${model.label}: confira endpoint, parâmetros e se o modelo upstream "${model.upstreamModel}" existe. Detalhe: ${text.slice(0, 240)}`);
     if (response.status === 404) throw new Error(`Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`);
     if (response.status === 429) throw new Error(`Limite do provedor ${model.label} atingido. Aguarde alguns segundos ou use outro modelo.`);
+    if (response.status === 502 || /bad gateway|<html/i.test(text)) throw new Error(`O provedor ${model.label} retornou gateway/instabilidade (${response.status}). Isso costuma ser falha upstream ou congestionamento do modelo "${model.upstreamModel}"; tente novamente ou use um modelo menor. Detalhe: ${text.replace(/\s+/g, " ").slice(0, 180)}`);
     throw new Error(`Falha no provedor ${model.label} (${response.status}): ${text.slice(0, 240)}`);
   }
 

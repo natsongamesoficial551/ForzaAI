@@ -148,61 +148,70 @@ function classifyPromptLocally(prompt: string, project: { site_type?: string | n
 }
 
 function optionQuestion(id: string, question: string, options: string[]): WizardQuestion {
-  return { id, question, options: options.slice(0, 5) };
+  const uniqueOptions = [...new Set(options.map((option) => option.trim()).filter(Boolean))].slice(0, 4);
+  return { id, question, options: uniqueOptions };
 }
 
 function contextualQuestions(kind: ProjectKind, complexity: ProjectComplexity, prompt: string): WizardQuestion[] {
+  const promptHint = prompt.length > 80 ? prompt.slice(0, 80) : prompt;
   const shared = [
-    optionQuestion("visual_style", "Qual direção visual combina melhor com esse projeto?", ["Premium escuro", "Claro minimalista", "Colorido moderno", "Corporativo confiável", "Futurista tech"]),
-    optionQuestion("tone", "Qual tom de comunicação a IA deve usar?", ["Profissional direto", "Vendedor persuasivo", "Sofisticado", "Amigável", "Técnico"]),
+    optionQuestion("visual_style", "Qual visual deve guiar toda a interface?", ["Minimalista premium", "SaaS moderno escuro", "Editorial sofisticado", "Clean claro e elegante"]),
+    optionQuestion("conversion", "Qual ação principal precisa ficar impossível de ignorar?", ["Agendar conversa", "Começar grátis", "Ver projetos/cases", "Comprar ou contratar"]),
   ];
   const byKind: Record<ProjectKind, WizardQuestion[]> = {
     landing_page: [
-      optionQuestion("audience", "Quem é o público principal da landing page?", ["Empresas B2B", "Consumidor final", "Profissionais liberais", "Startups", "Público local"]),
-      optionQuestion("offer", "Qual é a oferta principal?", ["Serviço", "Produto digital", "App/SaaS", "Consultoria", "Evento"]),
-      optionQuestion("primary_cta", "Qual CTA deve ser priorizado?", ["Comprar agora", "Agendar demo", "Entrar em contato", "Começar grátis", "Solicitar orçamento"]),
-      optionQuestion("sections", "Quais seções são indispensáveis?", ["Benefícios + prova social", "Pricing + FAQ", "Cases + depoimentos", "Como funciona", "Comparativo"]),
+      optionQuestion("promise", `Qual promessa central a página deve vender para “${promptHint}”?`, ["Economizar tempo", "Aumentar vendas", "Parecer mais profissional", "Automatizar operação"]),
+      optionQuestion("audience", "Para quem a copy deve falar diretamente?", ["Fundadores B2B", "Pequenas empresas", "Criadores/autônomos", "Clientes finais premium"]),
+      optionQuestion("pricing", "Como o pricing deve aparecer?", ["3 planos comparáveis", "Plano único destacado", "Trial + Pro", "Sob consulta"]),
+      optionQuestion("proof", "Que prova aumenta mais confiança?", ["Depoimentos curtos", "Métricas de resultado", "Logos de clientes", "Antes/depois"]),
+      optionQuestion("sections", "Qual estrutura deve vir antes do CTA final?", ["Dor > solução > preço", "Hero > features > demo", "Benefícios > cases > FAQ", "Como funciona > planos"]),
     ],
     portfolio: [
-      optionQuestion("profession", "Qual posicionamento do portfólio?", ["Designer UI/UX", "Desenvolvedor", "Fotógrafo", "Agência criativa", "Freelancer premium"]),
-      optionQuestion("work_focus", "O que deve receber mais destaque?", ["Projetos visuais", "Serviços", "Sobre mim", "Resultados/cases", "Contato rápido"]),
-      optionQuestion("portfolio_mood", "Qual sensação o portfólio deve passar?", ["Minimalista autoral", "Luxo editorial", "Criativo ousado", "Tech moderno", "Elegante discreto"]),
+      optionQuestion("positioning", `Qual posicionamento combina com “${promptHint}”?`, ["Designer especialista", "Criativo premium", "Freelancer estratégico", "Estúdio autoral"]),
+      optionQuestion("project_grid", "Como os trabalhos devem ser apresentados?", ["Cards grandes visuais", "Cases com narrativa", "Galeria minimalista", "Antes/depois com métricas"]),
+      optionQuestion("services", "Quais serviços devem ficar claros?", ["Branding + UI", "Sites e landing pages", "Produto digital", "Identidade visual"]),
+      optionQuestion("personality", "Qual sensação o visitante deve ter?", ["Confiança premium", "Criatividade ousada", "Calma minimalista", "Precisão técnica"]),
+      optionQuestion("contact", "Qual caminho de contato deve dominar?", ["WhatsApp direto", "Formulário curto", "Agendar chamada", "E-mail profissional"]),
     ],
     ecommerce: [
-      optionQuestion("catalog", "Como o catálogo deve ser apresentado?", ["Produtos em destaque", "Categorias com filtros", "Coleções sazonais", "Mais vendidos", "Lançamentos"]),
-      optionQuestion("checkout", "Qual experiência de compra simular?", ["Carrinho lateral", "Checkout em etapas", "Compra rápida", "Wishlist", "Cupom/desconto"]),
-      optionQuestion("trust", "Qual prova de confiança é mais importante?", ["Frete e troca", "Avaliações", "Pagamento seguro", "Garantia", "Suporte rápido"]),
-      optionQuestion("brand", "Qual estilo da loja?", ["Moda premium", "Minimalista clean", "Streetwear", "Artesanal", "Tech futurista"]),
+      optionQuestion("catalog", "Qual experiência de catálogo deve parecer pronta para venda?", ["Coleções + filtros", "Produtos hero", "Mais vendidos", "Lançamentos premium"]),
+      optionQuestion("purchase_flow", "Qual fluxo de compra deve ser simulado?", ["Carrinho lateral", "Checkout em etapas", "Compra rápida", "Wishlist + cupom"]),
+      optionQuestion("trust", "Qual bloco reduz mais objeção?", ["Frete e trocas", "Avaliações reais", "Pagamento seguro", "Garantia destacada"]),
+      optionQuestion("merchandising", "Como destacar produtos?", ["Fotos grandes", "Badges de oferta", "Comparação de variações", "Bundles/kits"]),
+      optionQuestion("brand", "Qual estética da loja?", ["Luxo clean", "Street moderno", "Natural/artesanal", "Tech futurista"]),
     ],
     saas: [
-      optionQuestion("saas_user", "Quem usará o SaaS no dia a dia?", ["Dono/gestor", "Equipe operacional", "Cliente final", "Agência", "Time comercial"]),
-      optionQuestion("core_module", "Qual módulo central o SaaS precisa demonstrar?", ["Dashboard + métricas", "CRM/funil", "Projetos/tasks", "Financeiro/billing", "Automação com IA"]),
-      optionQuestion("auth_roles", "Quais papéis/permissões fazem sentido?", ["Admin e usuário", "Owner, manager e member", "Equipe e cliente", "Free e Pro", "Multiempresa"]),
-      optionQuestion("onboarding", "Como deve ser o onboarding?", ["Checklist guiado", "Wizard inicial", "Importar dados", "Escolher template", "Tour do produto"]),
-      optionQuestion("integrations", "Quais integrações o blueprint deve prever?", ["Supabase", "Stripe", "GitHub", "IA/custom AI", "Nenhuma agora"]),
-      optionQuestion("billing", "Como os planos devem aparecer?", ["Free/Pro/Business", "Trial + assinatura", "Créditos de uso", "Por usuário", "Sob consulta"]),
+      optionQuestion("user", `Quem precisa sentir que este SaaS resolve “${promptHint}”?`, ["Founder/gestor", "Equipe operacional", "Cliente final", "Agência/consultoria"]),
+      optionQuestion("modules", "Quais telas precisam existir para parecer SaaS completo?", ["Onboarding + dashboard", "CRM + tarefas", "Billing + settings", "Projetos + relatórios"]),
+      optionQuestion("roles", "Qual modelo de acesso deve ser planejado?", ["Admin e usuário", "Owner/manager/member", "Equipe e cliente", "Multiempresa"]),
+      optionQuestion("data", "Quais dados mockados dão mais realidade ao produto?", ["Receita e métricas", "Clientes e pipeline", "Projetos e tarefas", "Uso e créditos"]),
+      optionQuestion("billing", "Como os planos devem funcionar no preview?", ["Free/Pro/Business", "Trial + assinatura", "Créditos por uso", "Por usuário"]),
+      optionQuestion("integrations", "Quais integrações o blueprint deve prever sem expor segredos?", ["Supabase + Stripe", "GitHub + IA", "Webhooks + API", "Nenhuma agora"]),
     ],
     dashboard: [
-      optionQuestion("metrics", "Quais métricas devem dominar o dashboard?", ["Receita", "Usuários", "Projetos", "Conversão", "Operação"]),
-      optionQuestion("views", "Quais visões o dashboard precisa ter?", ["Resumo executivo", "Tabela detalhada", "Kanban", "Relatórios", "Alertas"]),
-      optionQuestion("data_state", "Qual estado de dados deve aparecer?", ["Dados mockados realistas", "Loading/erro/vazio", "Filtros por período", "Exportação", "Comparativos"]),
+      optionQuestion("decision", "Qual decisão o dashboard deve ajudar a tomar rápido?", ["Crescimento/receita", "Operação diária", "Performance de equipe", "Conversão/funil"]),
+      optionQuestion("layout", "Qual layout deve dominar a primeira dobra?", ["KPIs + gráfico", "Tabela + filtros", "Kanban operacional", "Alertas + ações"]),
+      optionQuestion("filters", "Quais controles deixam o dashboard realista?", ["Período e status", "Equipe e canal", "Cliente/projeto", "Exportação/relatório"]),
+      optionQuestion("states", "Quais estados a UI precisa prever?", ["Loading/vazio/erro", "Comparativos", "Drill-down", "Notificações"]),
     ],
     internal_tool: [
-      optionQuestion("workflow", "Qual workflow principal o sistema interno deve cobrir?", ["Aprovação", "Cadastro/gestão", "Atendimento", "Operações", "Relatórios"]),
-      optionQuestion("permissions", "Qual estrutura de permissão combina melhor?", ["Admin/equipe", "Setores", "Solicitante/aprovador", "Auditoria", "Multiunidade"]),
-      optionQuestion("records", "Quais dados precisam ser organizados?", ["Clientes", "Pedidos", "Tarefas", "Documentos", "Tickets"]),
+      optionQuestion("workflow", "Qual workflow precisa ser navegável no preview?", ["Solicitação > aprovação", "Cadastro > revisão", "Ticket > resolução", "Pedido > entrega"]),
+      optionQuestion("records", "Quais registros devem aparecer com dados reais mockados?", ["Clientes", "Pedidos", "Tarefas", "Documentos"]),
+      optionQuestion("permissions", "Qual regra de permissão deve ser planejada?", ["Admin/equipe", "Setores", "Solicitante/aprovador", "Auditoria"]),
+      optionQuestion("productivity", "Qual recurso dá sensação de sistema completo?", ["Busca + filtros", "Histórico/auditoria", "Comentários internos", "Relatórios"]),
     ],
     other: [
-      optionQuestion("goal", "Qual é o objetivo principal do projeto?", ["Vender", "Capturar leads", "Apresentar produto", "Gerenciar dados", "Validar ideia"]),
-      optionQuestion("scope", "Qual escopo você espera?", ["Página simples", "Site completo", "App/SaaS", "Dashboard", "Protótipo navegável"]),
-      optionQuestion("must_have", "O que não pode faltar?", ["Visual premium", "Fluxos completos", "Copy forte", "Integrações futuras", "Mobile perfeito"]),
+      optionQuestion("goal", `Qual objetivo principal para “${promptHint}”?`, ["Vender", "Capturar leads", "Demonstrar produto", "Validar ideia"]),
+      optionQuestion("scope", "Qual escopo deve ser gerado agora?", ["Página completa", "Site com seções", "App navegável", "Dashboard mockado"]),
+      optionQuestion("must_have", "O que mais impacta a percepção de qualidade?", ["Visual premium", "Copy forte", "Fluxos completos", "Mobile perfeito"]),
+      optionQuestion("depth", "Qual nível de detalhe você espera?", ["Rápido e bonito", "Completo e convincente", "Técnico e estruturado", "Pronto para vender"]),
     ],
   };
   const questions = [...byKind[kind], ...shared];
   if (complexity === "enterprise") {
-    questions.push(optionQuestion("enterprise_depth", "Qual profundidade você quer para o blueprint técnico?", ["Frontend completo", "Frontend + backend planejado", "Banco + RLS planejados", "Integrações planejadas", "Tudo detalhado"]));
+    questions.push(optionQuestion("enterprise_depth", "Qual blueprint técnico deve ficar mais detalhado?", ["Backend/server functions", "Banco + RLS", "Integrações/OAuth", "Todos equilibrados"]));
   }
-  return questions.slice(0, kind === "saas" ? 9 : 7).map((question, index) => ({ ...question, id: `q${index + 1}_${question.id}` }));
+  return questions.slice(0, kind === "saas" ? 8 : 6).map((question, index) => ({ ...question, id: `q${index + 1}_${question.id}` }));
 }
 
 function normalizeClassification(value: unknown, fallback: WizardClassification): WizardClassification {
@@ -318,14 +327,23 @@ export async function saveGeneratedFiles(supabase: any, projectId: string, files
 
 function normalizeWizard(raw: unknown): { shouldAsk: boolean; summary?: string; questions: WizardQuestion[] } {
   const parsed = WizardOutputSchema.parse(raw);
-  const questions = parsed.questions.slice(0, 20).map((question, index) => ({
-    id: question.id || `q${index + 1}`,
-    question: question.question,
-    options: question.options.slice(0, 5),
-  }));
+  const questions = parsed.questions
+    .filter((question) => question.question.trim() && question.options.length >= 2)
+    .slice(0, 10)
+    .map((question, index) => {
+      const options = [...new Set(question.options.map((option) => option.trim()).filter(Boolean))]
+        .filter((option) => !isCustomWizardOption(option))
+        .slice(0, 4);
+      return {
+        id: question.id || `q${index + 1}`,
+        question: question.question.trim(),
+        options: [...options, "Outro / personalizado"],
+      };
+    })
+    .filter((question) => question.options.length >= 3);
 
   return {
-    shouldAsk: parsed.shouldAsk && questions.length >= 10,
+    shouldAsk: parsed.shouldAsk && questions.length >= 4,
     summary: parsed.summary,
     questions,
   };

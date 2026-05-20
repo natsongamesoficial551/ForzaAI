@@ -114,6 +114,7 @@ function Workspace() {
   const [initialPrompt, setInitialPrompt] = useState("");
   const [wizardPrompt, setWizardPrompt] = useState("");
   const [wizardQuestions, setWizardQuestions] = useState<WizardQuestion[]>([]);
+  const [wizardStep, setWizardStep] = useState(0);
   const [wizardAnswers, setWizardAnswers] = useState<Record<string, string>>({});
   const [wizardCustomAnswers, setWizardCustomAnswers] = useState<Record<string, string>>({});
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -226,6 +227,7 @@ function Workspace() {
       }
       setWizardPrompt(prompt);
       setWizardQuestions(wizard.questions);
+      setWizardStep(0);
       setWizardAnswers({});
       setWizardCustomAnswers({});
       toast.info("Responda o wizard para melhorar a geração.");
@@ -585,8 +587,24 @@ function Workspace() {
 
   const clearWizard = () => {
     setWizardQuestions([]);
+    setWizardStep(0);
     setWizardAnswers({});
     setWizardCustomAnswers({});
+  };
+
+  const currentWizardQuestion = wizardQuestions[wizardStep];
+
+  const handleWizardNext = () => {
+    if (!currentWizardQuestion) return;
+    if (!wizardAnswerValue(currentWizardQuestion)) {
+      toast.error("Responda essa pergunta para continuar.");
+      return;
+    }
+    if (wizardStep < wizardQuestions.length - 1) {
+      setWizardStep((step) => step + 1);
+      return;
+    }
+    handleWizardSubmit();
   };
 
   const handleWizardSubmit = () => {
@@ -804,75 +822,69 @@ document.addEventListener('click', function(event) {
                 </div>
               )}
             </div>
-            {wizardQuestions.length > 0 && (
-              <div className="border-t border-border bg-background/60 p-3 space-y-3 max-h-[45vh] overflow-auto">
-                <div>
-                  <div className="flex items-center gap-2 text-sm font-semibold">
-                    <CheckCircle2 className="size-4 text-primary" /> Plan: perguntas obrigatórias
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Responda para liberar o Build e gerar o site com mais precisão.
-                  </p>
-                </div>
-                {wizardQuestions.map((question, index) => (
-                  <div key={question.id} className="rounded-xl border border-border bg-card p-3">
-                    <div className="text-sm font-medium">
-                      {index + 1}. {question.question}
+            {currentWizardQuestion && (
+              <div className="border-t border-border bg-background/70 p-3">
+                <div className="rounded-2xl border border-primary/25 bg-card p-4 shadow-glow space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      <CheckCircle2 className="size-4 text-primary" /> Plan inteligente
                     </div>
-                    <div className="mt-2 grid gap-2">
-                      {question.options.map((option) => {
-                        const selected = wizardAnswers[question.id] === option;
-                        const isCustom = isCustomWizardOption(option);
-                        return (
-                          <div key={option} className="space-y-2">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setWizardAnswers((current) => ({ ...current, [question.id]: option }))
-                              }
-                              className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition ${
-                                selected
-                                  ? "border-primary bg-primary/10 text-foreground"
-                                  : "border-border hover:border-primary/50 text-muted-foreground"
-                              }`}
-                            >
-                              {option}
-                            </button>
-                            {selected && isCustom && (
-                              <Textarea
-                                value={wizardCustomAnswers[question.id] ?? ""}
-                                onChange={(event) =>
-                                  setWizardCustomAnswers((current) => ({
-                                    ...current,
-                                    [question.id]: event.target.value,
-                                  }))
-                                }
-                                placeholder="Digite sua resposta personalizada..."
-                                className="min-h-20 resize-none text-xs"
-                              />
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <span className="rounded-full border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
+                      Pergunta {wizardStep + 1} de {wizardQuestions.length}
+                    </span>
                   </div>
-                ))}
-                <div className="grid gap-2">
-                  <Button
-                    className="w-full bg-gradient-primary shadow-glow"
-                    onClick={handleWizardSubmit}
-                    disabled={sendMutation.isPending || generationJobMutation.isPending || !!activeJobId}
-                  >
-                    {(generationJobMutation.isPending || !!activeJobId) ? <Loader2 className="size-4 animate-spin" /> : <Hammer className="size-4" />} Build: gerar site
-                  </Button>
-                  <Button
-                    className="w-full"
-                    variant="outline"
-                    onClick={handleSkipWizardBuild}
-                    disabled={sendMutation.isPending || generationJobMutation.isPending || !!activeJobId}
-                  >
-                    Pular Plan e gerar direto
-                  </Button>
+                  <div className="text-sm font-medium leading-relaxed">
+                    {currentWizardQuestion.question}
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {currentWizardQuestion.options.slice(0, 5).map((option) => {
+                      const selected = wizardAnswers[currentWizardQuestion.id] === option;
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          onClick={() => setWizardAnswers((current) => ({ ...current, [currentWizardQuestion.id]: option }))}
+                          className={`rounded-xl border px-3 py-2 text-left text-xs transition ${
+                            selected
+                              ? "border-primary bg-primary/15 text-foreground shadow-sm"
+                              : "border-border bg-background/70 text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                          }`}
+                        >
+                          {option}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <Textarea
+                    value={wizardCustomAnswers[currentWizardQuestion.id] ?? ""}
+                    onFocus={() => setWizardAnswers((current) => ({ ...current, [currentWizardQuestion.id]: "Outro / personalizado" }))}
+                    onChange={(event) => {
+                      setWizardAnswers((current) => ({ ...current, [currentWizardQuestion.id]: "Outro / personalizado" }));
+                      setWizardCustomAnswers((current) => ({ ...current, [currentWizardQuestion.id]: event.target.value }));
+                    }}
+                    placeholder="Ou escreva uma resposta personalizada para esta pergunta..."
+                    className="min-h-16 resize-none text-xs"
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      className="bg-gradient-primary shadow-glow"
+                      onClick={handleWizardNext}
+                      disabled={sendMutation.isPending || generationJobMutation.isPending || !!activeJobId}
+                    >
+                      {wizardStep === wizardQuestions.length - 1 ? (
+                        <><Hammer className="size-4" /> Gerar site</>
+                      ) : (
+                        <>Próxima</>
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={handleSkipWizardBuild}
+                      disabled={sendMutation.isPending || generationJobMutation.isPending || !!activeJobId}
+                    >
+                      Pular e gerar direto
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}
