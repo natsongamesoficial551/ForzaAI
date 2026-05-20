@@ -1,6 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
+import { Agent } from "undici";
 
 const AI_REQUEST_TIMEOUT_MS = 7_200_000;
+const AI_FETCH_DISPATCHER = new Agent({
+  connect: { timeout: 120_000 },
+  headersTimeout: AI_REQUEST_TIMEOUT_MS,
+  bodyTimeout: AI_REQUEST_TIMEOUT_MS,
+});
 const MODEL_IDS = new Set(["forza-1-flash", "forza-1-pro", "forza-2-pro", "forza-2-5-thinking"]);
 
 const json = (status, body) => new Response(JSON.stringify(body), {
@@ -174,6 +180,7 @@ async function fetchAiText(model, body) {
         "Content-Type": "application/json",
       },
       signal: controller.signal,
+      dispatcher: AI_FETCH_DISPATCHER,
       body: JSON.stringify(normalizeAiRequestBody(model, body)),
     });
   } catch (error) {
