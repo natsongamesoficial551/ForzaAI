@@ -147,6 +147,15 @@ async function routeModel(supabase, modelId, hasSubscription) {
   };
 }
 
+function normalizeAiRequestBody(model, body) {
+  const requestBody = { ...body, model: model.upstreamModel };
+  const isOpenAiGpt5 =
+    String(model.endpoint || "").includes("api.openai.com") &&
+    /^gpt-5/i.test(String(model.upstreamModel || ""));
+  if (isOpenAiGpt5) delete requestBody.temperature;
+  return requestBody;
+}
+
 async function fetchAiText(model, body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
@@ -159,7 +168,7 @@ async function fetchAiText(model, body) {
         "Content-Type": "application/json",
       },
       signal: controller.signal,
-      body: JSON.stringify({ ...body, model: model.upstreamModel }),
+      body: JSON.stringify(normalizeAiRequestBody(model, body)),
     });
   } catch (error) {
     if (error?.name === "AbortError") {

@@ -428,6 +428,13 @@ function aiHeaders(model: RoutedAiModel) {
 
 const AI_REQUEST_TIMEOUT_MS = 240_000;
 
+function normalizeAiRequestBody(model: RoutedAiModel, body: Record<string, unknown>) {
+  const requestBody = { ...body, model: model.upstreamModel };
+  const isOpenAiGpt5 = model.endpoint.includes("api.openai.com") && /^gpt-5/i.test(model.upstreamModel);
+  if (isOpenAiGpt5) delete requestBody.temperature;
+  return requestBody;
+}
+
 async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unknown>) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
@@ -445,7 +452,7 @@ async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unkn
       method: "POST",
       headers: aiHeaders(model),
       signal: controller.signal,
-      body: JSON.stringify({ ...body, model: model.upstreamModel }),
+      body: JSON.stringify(normalizeAiRequestBody(model, body)),
     });
   } catch (error) {
     console.error("[AI generation] fetch-error", {
