@@ -398,6 +398,28 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
   return workingFiles;
 }
 
+async function repairFilesForQuality(supabase, model, run, job, project, plans, files, gateReport) {
+  await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: reforçando qualidade antes da validação…");
+  const content = await fetchAiText(model, {
+    stream: false,
+    temperature: 0.1,
+    messages: [
+      {
+        role: "system",
+        content: "Você é o reparador final do ForzaAI. Recrie e expanda os três arquivos completos para passar quality gates determinísticos. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: HTML premium e completo, CSS robusto com responsividade usando @media, JS seguro sem eval/segredos, zero placeholders/TODO/lorem ipsum, conteúdo específico do pedido. Para portfólio, inclua hero, bio, serviços, cases/projetos, processo, depoimentos/prova social e contato. Para SaaS/app, inclua landing, onboarding, dashboard, pricing/billing, settings e dados mockados seguros.",
+      },
+      {
+        role: "user",
+        content: `Projeto: ${project.name}\nPedido original: ${job.message}\nPlanos:\n${JSON.stringify(plans)}\n\nProblemas detectados:\n${(gateReport.issues || []).join("\n")}\n\nArquivos atuais:\n${filesContext(files)}`,
+      },
+    ],
+  }, { supabase, jobId: job.id });
+  await saveArtifact(supabase, run.id, "model_raw_output", { repair: true, content: content.slice(0, 120_000), issues: gateReport.issues || [] });
+  const parsed = normalizeGeneratedFiles(content, project.name);
+  if (!parsed) return files;
+  return parsed;
+}
+
 function deterministicQualityReport(project, job, files) {
   const byPath = Object.fromEntries(files.map((file) => [file.path, file.content || ""]));
   const html = byPath["index.html"] || "";
@@ -552,7 +574,11 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
   try {
     const plans = await buildPlans(supabase, model, run, project, job, currentFiles, skillsContext);
     const tasks = await createImplementationTasks(supabase, model, run, job, plans);
-    const files = await implementFiles(supabase, model, run, job, project, plans, tasks, currentFiles, skillsContext);
+    let files = await implementFiles(supabase, model, run, job, project, plans, tasks, currentFiles, skillsContext);
+    const firstGateReport = deterministicQualityReport(project, job, files);
+    if (!firstGateReport.passed) {
+      files = await repairFilesForQuality(supabase, model, run, job, project, plans, files, firstGateReport);
+    }
     const validationReport = await validateFiles(supabase, model, run, job, project, plans, files);
     await setPhase(supabase, job.id, run.id, "finalize", "Forza Engine: salvando versão final…");
     await saveFiles(supabase, job.project_id, files);
