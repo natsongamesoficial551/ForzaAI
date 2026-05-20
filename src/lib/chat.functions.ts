@@ -93,6 +93,132 @@ type GeneratedFile = {
   content: string;
 };
 
+type ProjectKind = "landing_page" | "portfolio" | "ecommerce" | "saas" | "dashboard" | "internal_tool" | "other";
+type ProjectComplexity = "simple" | "standard" | "advanced" | "enterprise";
+
+type WizardClassification = {
+  shouldAsk: boolean;
+  projectKind: ProjectKind;
+  complexity: ProjectComplexity;
+  summary: string;
+  missingContext: string[];
+};
+
+const projectKindLabels: Record<ProjectKind, string> = {
+  landing_page: "landing page",
+  portfolio: "portfólio",
+  ecommerce: "e-commerce",
+  saas: "SaaS",
+  dashboard: "dashboard",
+  internal_tool: "sistema interno",
+  other: "projeto digital",
+};
+
+function classifyPromptLocally(prompt: string, project: { site_type?: string | null; description?: string | null; name?: string | null }): WizardClassification {
+  const text = `${prompt} ${project.site_type ?? ""} ${project.description ?? ""} ${project.name ?? ""}`.toLowerCase();
+  const has = (terms: string[]) => terms.some((term) => text.includes(term));
+  const projectKind: ProjectKind = has(["saas", "software as a service", "assinatura", "dashboard", "login", "usuário", "usuarios", "multi tenant", "crm", "erp"])
+    ? "saas"
+    : has(["e-commerce", "ecommerce", "loja", "produto", "carrinho", "checkout", "catálogo", "catalogo"])
+      ? "ecommerce"
+      : has(["portfolio", "portfólio", "designer", "freelancer", "currículo", "curriculo"])
+        ? "portfolio"
+        : has(["dashboard", "analytics", "relatório", "relatorio", "métricas", "metricas"])
+          ? "dashboard"
+          : has(["sistema interno", "admin", "gestão", "gestao", "workflow", "backoffice"])
+            ? "internal_tool"
+            : has(["landing", "lp", "página de vendas", "pagina de vendas", "captura", "site"])
+              ? "landing_page"
+              : "other";
+  const complexity: ProjectComplexity = projectKind === "saas" || projectKind === "internal_tool"
+    ? "enterprise"
+    : projectKind === "ecommerce" || projectKind === "dashboard"
+      ? "advanced"
+      : projectKind === "landing_page" || projectKind === "portfolio"
+        ? "standard"
+        : "simple";
+  const shouldAsk = has(["site", "landing", "saas", "app", "sistema", "loja", "e-commerce", "ecommerce", "portfolio", "portfólio", "dashboard", "página", "pagina"]);
+  return {
+    shouldAsk,
+    projectKind,
+    complexity,
+    summary: `${projectKindLabels[projectKind]} ${complexity} baseado em: ${prompt}`.slice(0, 240),
+    missingContext: [],
+  };
+}
+
+function optionQuestion(id: string, question: string, options: string[]): WizardQuestion {
+  return { id, question, options: options.slice(0, 5) };
+}
+
+function contextualQuestions(kind: ProjectKind, complexity: ProjectComplexity, prompt: string): WizardQuestion[] {
+  const shared = [
+    optionQuestion("visual_style", "Qual direção visual combina melhor com esse projeto?", ["Premium escuro", "Claro minimalista", "Colorido moderno", "Corporativo confiável", "Futurista tech"]),
+    optionQuestion("tone", "Qual tom de comunicação a IA deve usar?", ["Profissional direto", "Vendedor persuasivo", "Sofisticado", "Amigável", "Técnico"]),
+  ];
+  const byKind: Record<ProjectKind, WizardQuestion[]> = {
+    landing_page: [
+      optionQuestion("audience", "Quem é o público principal da landing page?", ["Empresas B2B", "Consumidor final", "Profissionais liberais", "Startups", "Público local"]),
+      optionQuestion("offer", "Qual é a oferta principal?", ["Serviço", "Produto digital", "App/SaaS", "Consultoria", "Evento"]),
+      optionQuestion("primary_cta", "Qual CTA deve ser priorizado?", ["Comprar agora", "Agendar demo", "Entrar em contato", "Começar grátis", "Solicitar orçamento"]),
+      optionQuestion("sections", "Quais seções são indispensáveis?", ["Benefícios + prova social", "Pricing + FAQ", "Cases + depoimentos", "Como funciona", "Comparativo"]),
+    ],
+    portfolio: [
+      optionQuestion("profession", "Qual posicionamento do portfólio?", ["Designer UI/UX", "Desenvolvedor", "Fotógrafo", "Agência criativa", "Freelancer premium"]),
+      optionQuestion("work_focus", "O que deve receber mais destaque?", ["Projetos visuais", "Serviços", "Sobre mim", "Resultados/cases", "Contato rápido"]),
+      optionQuestion("portfolio_mood", "Qual sensação o portfólio deve passar?", ["Minimalista autoral", "Luxo editorial", "Criativo ousado", "Tech moderno", "Elegante discreto"]),
+    ],
+    ecommerce: [
+      optionQuestion("catalog", "Como o catálogo deve ser apresentado?", ["Produtos em destaque", "Categorias com filtros", "Coleções sazonais", "Mais vendidos", "Lançamentos"]),
+      optionQuestion("checkout", "Qual experiência de compra simular?", ["Carrinho lateral", "Checkout em etapas", "Compra rápida", "Wishlist", "Cupom/desconto"]),
+      optionQuestion("trust", "Qual prova de confiança é mais importante?", ["Frete e troca", "Avaliações", "Pagamento seguro", "Garantia", "Suporte rápido"]),
+      optionQuestion("brand", "Qual estilo da loja?", ["Moda premium", "Minimalista clean", "Streetwear", "Artesanal", "Tech futurista"]),
+    ],
+    saas: [
+      optionQuestion("saas_user", "Quem usará o SaaS no dia a dia?", ["Dono/gestor", "Equipe operacional", "Cliente final", "Agência", "Time comercial"]),
+      optionQuestion("core_module", "Qual módulo central o SaaS precisa demonstrar?", ["Dashboard + métricas", "CRM/funil", "Projetos/tasks", "Financeiro/billing", "Automação com IA"]),
+      optionQuestion("auth_roles", "Quais papéis/permissões fazem sentido?", ["Admin e usuário", "Owner, manager e member", "Equipe e cliente", "Free e Pro", "Multiempresa"]),
+      optionQuestion("onboarding", "Como deve ser o onboarding?", ["Checklist guiado", "Wizard inicial", "Importar dados", "Escolher template", "Tour do produto"]),
+      optionQuestion("integrations", "Quais integrações o blueprint deve prever?", ["Supabase", "Stripe", "GitHub", "IA/custom AI", "Nenhuma agora"]),
+      optionQuestion("billing", "Como os planos devem aparecer?", ["Free/Pro/Business", "Trial + assinatura", "Créditos de uso", "Por usuário", "Sob consulta"]),
+    ],
+    dashboard: [
+      optionQuestion("metrics", "Quais métricas devem dominar o dashboard?", ["Receita", "Usuários", "Projetos", "Conversão", "Operação"]),
+      optionQuestion("views", "Quais visões o dashboard precisa ter?", ["Resumo executivo", "Tabela detalhada", "Kanban", "Relatórios", "Alertas"]),
+      optionQuestion("data_state", "Qual estado de dados deve aparecer?", ["Dados mockados realistas", "Loading/erro/vazio", "Filtros por período", "Exportação", "Comparativos"]),
+    ],
+    internal_tool: [
+      optionQuestion("workflow", "Qual workflow principal o sistema interno deve cobrir?", ["Aprovação", "Cadastro/gestão", "Atendimento", "Operações", "Relatórios"]),
+      optionQuestion("permissions", "Qual estrutura de permissão combina melhor?", ["Admin/equipe", "Setores", "Solicitante/aprovador", "Auditoria", "Multiunidade"]),
+      optionQuestion("records", "Quais dados precisam ser organizados?", ["Clientes", "Pedidos", "Tarefas", "Documentos", "Tickets"]),
+    ],
+    other: [
+      optionQuestion("goal", "Qual é o objetivo principal do projeto?", ["Vender", "Capturar leads", "Apresentar produto", "Gerenciar dados", "Validar ideia"]),
+      optionQuestion("scope", "Qual escopo você espera?", ["Página simples", "Site completo", "App/SaaS", "Dashboard", "Protótipo navegável"]),
+      optionQuestion("must_have", "O que não pode faltar?", ["Visual premium", "Fluxos completos", "Copy forte", "Integrações futuras", "Mobile perfeito"]),
+    ],
+  };
+  const questions = [...byKind[kind], ...shared];
+  if (complexity === "enterprise") {
+    questions.push(optionQuestion("enterprise_depth", "Qual profundidade você quer para o blueprint técnico?", ["Frontend completo", "Frontend + backend planejado", "Banco + RLS planejados", "Integrações planejadas", "Tudo detalhado"]));
+  }
+  return questions.slice(0, kind === "saas" ? 9 : 7).map((question, index) => ({ ...question, id: `q${index + 1}_${question.id}` }));
+}
+
+function normalizeClassification(value: unknown, fallback: WizardClassification): WizardClassification {
+  if (!value || typeof value !== "object") return fallback;
+  const obj = value as Record<string, unknown>;
+  const allowedKinds: ProjectKind[] = ["landing_page", "portfolio", "ecommerce", "saas", "dashboard", "internal_tool", "other"];
+  const allowedComplexities: ProjectComplexity[] = ["simple", "standard", "advanced", "enterprise"];
+  return {
+    shouldAsk: typeof obj.shouldAsk === "boolean" ? obj.shouldAsk : fallback.shouldAsk,
+    projectKind: allowedKinds.includes(obj.projectKind as ProjectKind) ? (obj.projectKind as ProjectKind) : fallback.projectKind,
+    complexity: allowedComplexities.includes(obj.complexity as ProjectComplexity) ? (obj.complexity as ProjectComplexity) : fallback.complexity,
+    summary: typeof obj.summary === "string" && obj.summary.trim() ? obj.summary.slice(0, 240) : fallback.summary,
+    missingContext: Array.isArray(obj.missingContext) ? obj.missingContext.map(String).slice(0, 8) : fallback.missingContext,
+  };
+}
+
 function normalizePath(value: unknown): GeneratedFile["path"] | null {
   if (typeof value !== "string") return null;
   const p = value.trim().toLowerCase().replace(/^\/+/, "");
@@ -614,35 +740,64 @@ export const generateProjectWizard = createServerFn({ method: "POST" })
       .single();
     if (projErr || !project) throw new Error("Projeto não encontrado");
 
-    const upstream = await fetchAiCompletion(model, {
-      stream: false,
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content:
-            "Você é o wizard anti-alucinação do ForzaAI. Analise o primeiro prompt do usuário. Se for pedido de site, landing page, SaaS, app, produto digital, e-commerce, portfólio ou sistema, retorne shouldAsk=true e gere de 10 a 20 perguntas obrigatórias de múltipla escolha para coletar contexto antes da criação. Cada pergunta deve ter 2 a 5 opções curtas. Se não for pedido de criação/planejamento de produto, retorne shouldAsk=false e questions=[]. Responda apenas JSON no formato {\"shouldAsk\":boolean,\"summary\":\"...\",\"questions\":[{\"id\":\"q1\",\"question\":\"...\",\"options\":[\"...\"]}]}",
-        },
-        {
-          role: "user",
-          content: `Projeto: ${project.name}\nTipo atual: ${project.site_type}\nDescrição atual: ${project.description ?? "—"}\nPrompt inicial: ${data.prompt}`,
-        },
-      ],
-    });
+    const fallbackClassification = classifyPromptLocally(data.prompt, project);
+    let classification = fallbackClassification;
+    try {
+      const classificationText = await fetchAiText(model, {
+        stream: false,
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "Você é o classificador de intenção enterprise do ForzaAI. Classifique o pedido para guiar um motor de geração de sites/SaaS. Responda somente JSON com: shouldAsk boolean, projectKind enum landing_page|portfolio|ecommerce|saas|dashboard|internal_tool|other, complexity enum simple|standard|advanced|enterprise, summary curta, missingContext array. Não gere perguntas aqui.",
+          },
+          {
+            role: "user",
+            content: `Projeto: ${project.name}\nTipo atual: ${project.site_type}\nDescrição atual: ${project.description ?? "—"}\nPrompt inicial: ${data.prompt}`,
+          },
+        ],
+      });
+      classification = normalizeClassification(extractJson(classificationText), fallbackClassification);
+    } catch (error) {
+      console.warn("[wizard] classification fallback", error);
+    }
 
-    const payload = await upstream.json();
-    const content = payload?.choices?.[0]?.message?.content;
-    if (typeof content !== "string") throw new Error("Resposta inválida do wizard");
+    if (!classification.shouldAsk) return { shouldAsk: false, summary: classification.summary, questions: [] };
 
-    const wizard = normalizeWizard(extractJson(content));
+    const fallbackQuestions = contextualQuestions(classification.projectKind, classification.complexity, data.prompt);
+    let wizard = normalizeWizard({ shouldAsk: true, summary: classification.summary, questions: fallbackQuestions });
+    try {
+      const questionsText = await fetchAiText(model, {
+        stream: false,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "Você é o wizard anti-burro do ForzaAI. Gere perguntas múltipla escolha altamente específicas para o tipo de projeto. Faça poucas perguntas, mas cada uma deve influenciar diretamente produto, UX, backend, banco, integrações ou copy. Nunca pergunte coisas genéricas sem impacto. Responda somente JSON: {\"shouldAsk\":true,\"summary\":\"...\",\"questions\":[{\"id\":\"q1\",\"question\":\"...\",\"options\":[\"...\"]}]}. Gere de 5 a 9 perguntas, cada uma com 2 a 5 opções curtas.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify({ project, prompt: data.prompt, classification, fallbackQuestions }),
+          },
+        ],
+      });
+      wizard = normalizeWizard(extractJson(questionsText));
+      if (wizard.questions.length < 4) wizard = normalizeWizard({ shouldAsk: true, summary: classification.summary, questions: fallbackQuestions });
+    } catch (error) {
+      console.warn("[wizard] contextual questions fallback", error);
+    }
+
     if (wizard.shouldAsk) {
       await supabase.from("project_memory").upsert(
         {
           project_id: data.projectId,
           category: "wizard",
           key: "initial_questions",
-          value: JSON.stringify({ prompt: data.prompt, ...wizard }),
+          value: JSON.stringify({ prompt: data.prompt, classification, ...wizard }),
         },
         { onConflict: "project_id,key" },
       );
