@@ -105,6 +105,106 @@ function normalizeGeneratedFiles(text, projectName) {
   ];
 }
 
+function escapeHtml(value) {
+  return String(value || "").replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
+}
+
+function deterministicPremiumFiles(project, job, plans, reason = []) {
+  const title = escapeHtml(project.name || "Projeto ForzaAI");
+  const request = escapeHtml(job.message || project.description || project.name || "site premium");
+  const lowerRequest = String(job.message || project.name || "").toLowerCase();
+  const isPortfolio = /portfolio|portfólio|designer|freelancer|criativo/.test(lowerRequest);
+  const isSaas = /saas|software|pricing|dashboard|login|billing|assinatura|crm|app/.test(lowerRequest);
+  const primaryLabel = isPortfolio ? "Ver projetos" : isSaas ? "Começar teste grátis" : "Solicitar proposta";
+  const secondaryLabel = isPortfolio ? "Falar comigo" : isSaas ? "Ver pricing" : "Conhecer solução";
+  const modules = isPortfolio
+    ? ["Identidade visual", "UX/UI para produtos digitais", "Landing pages premium", "Design systems", "Cases com métricas", "Contato estratégico"]
+    : isSaas
+      ? ["Landing de conversão", "Pricing com planos", "Onboarding guiado", "Dashboard com métricas", "Settings e billing", "Dados mockados seguros"]
+      : ["Oferta clara", "Prova social", "Seções comerciais", "FAQ", "CTA recorrente", "Responsividade completa"];
+  const html = `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${title}</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <nav class="nav-shell" aria-label="Navegação principal">
+      <a class="brand" href="#topo" aria-label="${title}"><span>${title.slice(0, 1)}</span>${title}</a>
+      <div class="nav-links">
+        <a href="#solucao">Solução</a>
+        <a href="#projetos">${isPortfolio ? "Projetos" : "Produto"}</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#contato">Contato</a>
+      </div>
+      <a class="nav-cta" href="#contato">${primaryLabel}</a>
+    </nav>
+  </header>
+  <main id="topo">
+    <section class="hero section-grid">
+      <div class="hero-copy reveal">
+        <p class="eyebrow">Criado com Forza Engine</p>
+        <h1>${title}: uma experiência premium para ${request}</h1>
+        <p class="hero-lead">Página completa, responsiva e orientada à conversão, com narrativa clara, visual moderno, prova social, pricing e fluxos simulados para validar a ideia sem expor segredos.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#contato">${primaryLabel}</a>
+          <a class="button ghost" href="#pricing">${secondaryLabel}</a>
+        </div>
+        <ul class="trust-list" aria-label="Diferenciais">
+          <li>Mobile-first</li><li>Copy brasileira</li><li>Visual premium</li><li>Sem segredos no frontend</li>
+        </ul>
+      </div>
+      <aside class="hero-panel reveal" aria-label="Preview do produto">
+        <div class="panel-top"><span></span><span></span><span></span></div>
+        <div class="metric-card strong"><small>Conversão estimada</small><strong>+38%</strong><em>com CTA e prova social consistentes</em></div>
+        <div class="mini-grid">
+          <div><strong>12</strong><small>Seções</small></div><div><strong>3</strong><small>Planos</small></div><div><strong>100%</strong><small>Responsivo</small></div>
+        </div>
+        <div class="chart-bars"><i></i><i></i><i></i><i></i><i></i></div>
+      </aside>
+    </section>
+    <section id="solucao" class="section-block">
+      <div class="section-heading"><p class="eyebrow">Estratégia</p><h2>Estrutura pensada para transformar visitantes em leads qualificados.</h2><p>O layout organiza mensagem, benefícios, diferenciais, prova social e CTA em uma jornada simples de entender e fácil de agir.</p></div>
+      <div class="cards-grid">${modules.map((item, index) => `<article class="feature-card reveal"><span>0${index + 1}</span><h3>${item}</h3><p>${isPortfolio ? "Mostra valor profissional com clareza, estética e contexto de negócio para cada case." : "Ajuda o visitante a entender rapidamente o valor e avançar para o próximo passo."}</p></article>`).join("")}</div>
+    </section>
+    <section id="projetos" class="showcase section-grid">
+      <div><p class="eyebrow">Experiência</p><h2>${isPortfolio ? "Cases com narrativa, processo e resultado." : "Produto demonstrável mesmo antes do backend real."}</h2><p>Cada bloco usa dados seguros e mockados para mostrar fluxos reais sem colocar API keys, SQL sensível ou tokens no navegador.</p></div>
+      <div class="workspace-card">
+        <div class="tabs"><button class="active" type="button">Overview</button><button type="button">Dashboard</button><button type="button">Settings</button></div>
+        <div class="workspace-content"><h3>${isPortfolio ? "Case: redesign de marca SaaS" : "Dashboard do cliente"}</h3><p>Visão de métricas, status e próximos passos em uma interface limpa e objetiva.</p><div class="progress"><span style="width:76%"></span></div><div class="task-list"><p>Briefing validado</p><p>Identidade aplicada</p><p>Fluxo responsivo aprovado</p></div></div>
+      </div>
+    </section>
+    <section class="social-proof section-block">
+      <div class="quote-card"><p>“A proposta ficou clara em poucos segundos. Visual forte, estrutura objetiva e CTAs no lugar certo.”</p><strong>Cliente beta</strong><span>Validação de produto digital</span></div>
+      <div class="stats-grid"><div><strong>4.9/5</strong><span>Satisfação</span></div><div><strong>7 dias</strong><span>Para validar</span></div><div><strong>24h</strong><span>Para iterar</span></div></div>
+    </section>
+    <section id="pricing" class="section-block pricing-section">
+      <div class="section-heading"><p class="eyebrow">Pricing</p><h2>Planos claros para remover fricção na decisão.</h2><p>Estrutura pronta para simular assinatura, proposta ou pacotes de serviço.</p></div>
+      <div class="pricing-grid">
+        <article class="price-card"><h3>Starter</h3><strong>R$ 49</strong><p>Para validar a primeira oferta.</p><ul><li>Landing completa</li><li>CTA principal</li><li>FAQ essencial</li></ul><a href="#contato">Escolher Starter</a></article>
+        <article class="price-card featured"><h3>Pro</h3><strong>R$ 149</strong><p>Para produto com prova social e funil.</p><ul><li>Pricing avançado</li><li>Dashboard mockado</li><li>Onboarding visual</li></ul><a href="#contato">Escolher Pro</a></article>
+        <article class="price-card"><h3>Enterprise</h3><strong>Custom</strong><p>Para operação com integrações futuras.</p><ul><li>Blueprint técnico</li><li>Integrações planejadas</li><li>Fluxos multiusuário</li></ul><a href="#contato">Falar com vendas</a></article>
+      </div>
+    </section>
+    <section class="faq section-block"><div class="section-heading"><p class="eyebrow">FAQ</p><h2>Perguntas que reduzem objeções.</h2></div><div class="faq-list"><details open><summary>Isso já conecta pagamentos reais?</summary><p>Não nesta etapa. O preview simula a experiência e deixa integrações como manifesto seguro para backend controlado.</p></details><details><summary>Funciona no celular?</summary><p>Sim, o CSS usa layout fluido, grid responsivo e media queries para telas menores.</p></details><details><summary>Tem dados sensíveis no código?</summary><p>Não. O frontend usa dados mockados e não inclui API keys, service role, tokens ou SQL sensível.</p></details></div></section>
+    <section id="contato" class="cta-section"><p class="eyebrow">Próximo passo</p><h2>Pronto para transformar essa ideia em uma página publicável?</h2><p>Use este preview como base visual e evolua com ajustes de copy, integrações seguras e backend quando necessário.</p><form class="lead-form"><input aria-label="Nome" placeholder="Seu nome" /><input aria-label="Email" placeholder="email@empresa.com" /><button type="submit">${primaryLabel}</button></form></section>
+  </main>
+  <footer class="site-footer"><p>${title} — preview gerado com fallback seguro do Forza Engine.</p><a href="#topo">Voltar ao topo</a></footer>
+  <script src="script.js"></script>
+</body>
+</html>`;
+  const css = `:root{color-scheme:dark;--bg:#08070d;--surface:#11101a;--surface-2:#181626;--text:#f8f4e8;--muted:#bdb4a4;--line:rgba(255,255,255,.12);--primary:#8b5cf6;--primary-2:#c084fc;--accent:#f6c66b;--good:#34d399;--shadow:0 24px 80px rgba(0,0,0,.38);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at top left,rgba(139,92,246,.22),transparent 34rem),radial-gradient(circle at 85% 10%,rgba(246,198,107,.12),transparent 28rem),var(--bg);color:var(--text)}a{color:inherit;text-decoration:none}button,input{font:inherit}.site-header{position:sticky;top:0;z-index:10;background:rgba(8,7,13,.76);backdrop-filter:blur(18px);border-bottom:1px solid var(--line)}.nav-shell{width:min(1180px,calc(100% - 32px));margin:auto;height:76px;display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{display:flex;align-items:center;gap:10px;font-weight:900;letter-spacing:-.04em}.brand span{display:grid;place-items:center;width:38px;height:38px;border-radius:14px;background:linear-gradient(135deg,var(--primary),var(--accent));color:#120d1f}.nav-links{display:flex;gap:22px;color:var(--muted);font-size:14px}.nav-links a:hover{color:var(--text)}.nav-cta,.button,.price-card a,.lead-form button{border:0;border-radius:999px;padding:13px 18px;font-weight:800;background:linear-gradient(135deg,var(--primary),var(--primary-2));color:white;box-shadow:0 14px 34px rgba(139,92,246,.28);cursor:pointer}.section-grid{width:min(1180px,calc(100% - 32px));margin:auto;display:grid;grid-template-columns:1.05fr .95fr;gap:42px;align-items:center}.hero{min-height:760px;padding:92px 0}.eyebrow{margin:0 0 12px;color:var(--accent);font-weight:900;text-transform:uppercase;letter-spacing:.14em;font-size:12px}.hero h1,.section-heading h2,.showcase h2,.cta-section h2{margin:0;color:var(--text);font-size:clamp(38px,6vw,76px);line-height:.94;letter-spacing:-.07em}.section-heading h2,.showcase h2,.cta-section h2{font-size:clamp(32px,4vw,56px)}.hero-lead,.section-heading p,.showcase p,.cta-section p{color:var(--muted);font-size:18px;line-height:1.75;max-width:760px}.hero-actions{display:flex;gap:14px;flex-wrap:wrap;margin:30px 0}.button.ghost{background:rgba(255,255,255,.08);border:1px solid var(--line);box-shadow:none}.trust-list{display:flex;gap:12px;flex-wrap:wrap;padding:0;margin:0;list-style:none}.trust-list li{border:1px solid var(--line);background:rgba(255,255,255,.06);border-radius:999px;padding:9px 12px;color:var(--muted);font-size:13px}.hero-panel,.workspace-card,.quote-card,.price-card,.feature-card{border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.09),rgba(255,255,255,.04));border-radius:32px;box-shadow:var(--shadow)}.hero-panel{padding:24px;min-height:470px}.panel-top{display:flex;gap:8px;margin-bottom:22px}.panel-top span{width:12px;height:12px;border-radius:50%;background:var(--line)}.metric-card{padding:24px;border-radius:24px;background:rgba(255,255,255,.07);display:grid;gap:8px}.metric-card small,.mini-grid small,.quote-card span,.stats-grid span{color:var(--muted)}.metric-card strong{font-size:62px;letter-spacing:-.08em}.metric-card em{color:var(--good);font-style:normal}.mini-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:18px 0}.mini-grid div,.stats-grid div{padding:18px;border-radius:20px;background:rgba(255,255,255,.06);border:1px solid var(--line)}.mini-grid strong,.stats-grid strong{display:block;font-size:28px}.chart-bars{height:150px;display:flex;align-items:end;gap:12px;padding:18px;background:rgba(255,255,255,.05);border-radius:24px}.chart-bars i{flex:1;border-radius:16px 16px 4px 4px;background:linear-gradient(180deg,var(--accent),var(--primary));min-height:42px}.chart-bars i:nth-child(2){height:70%}.chart-bars i:nth-child(3){height:46%}.chart-bars i:nth-child(4){height:88%}.chart-bars i:nth-child(5){height:62%}.section-block{width:min(1180px,calc(100% - 32px));margin:0 auto 90px}.section-heading{margin-bottom:28px}.cards-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.feature-card{padding:24px}.feature-card span{color:var(--accent);font-weight:900}.feature-card h3{font-size:22px;letter-spacing:-.04em}.feature-card p,.price-card p,.price-card li,.faq p{color:var(--muted);line-height:1.65}.showcase{margin-bottom:90px}.workspace-card{padding:22px}.tabs{display:flex;gap:10px;margin-bottom:18px}.tabs button{border:1px solid var(--line);background:transparent;color:var(--muted);padding:10px 12px;border-radius:999px}.tabs .active{background:rgba(139,92,246,.25);color:white}.workspace-content{background:rgba(0,0,0,.18);border-radius:24px;padding:24px}.progress{height:12px;border-radius:999px;background:rgba(255,255,255,.1);overflow:hidden}.progress span{display:block;height:100%;background:linear-gradient(90deg,var(--good),var(--accent));border-radius:inherit}.task-list{display:grid;gap:10px;margin-top:18px}.task-list p{margin:0;padding:12px;border:1px solid var(--line);border-radius:14px}.social-proof{display:grid;grid-template-columns:1fr 1fr;gap:18px}.quote-card{padding:28px}.quote-card p{font-size:24px;line-height:1.35}.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.pricing-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.price-card{padding:26px;display:grid;gap:14px}.price-card.featured{outline:2px solid rgba(246,198,107,.42);transform:translateY(-10px)}.price-card strong{font-size:44px;letter-spacing:-.06em}.price-card ul{padding-left:18px}.faq-list{display:grid;gap:12px}.faq details{border:1px solid var(--line);border-radius:22px;padding:18px;background:rgba(255,255,255,.05)}.faq summary{cursor:pointer;font-weight:800}.cta-section{width:min(960px,calc(100% - 32px));margin:0 auto 90px;text-align:center;padding:46px;border:1px solid var(--line);border-radius:36px;background:linear-gradient(135deg,rgba(139,92,246,.22),rgba(246,198,107,.12));box-shadow:var(--shadow)}.lead-form{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;margin-top:24px}.lead-form input{min-width:0;border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.08);color:white;padding:15px 18px}.site-footer{width:min(1180px,calc(100% - 32px));margin:auto;padding:36px 0;color:var(--muted);display:flex;justify-content:space-between;border-top:1px solid var(--line)}.reveal{opacity:0;transform:translateY(18px);transition:.7s ease}.reveal.visible{opacity:1;transform:none}@media (max-width:920px){.nav-links{display:none}.section-grid,.social-proof,.pricing-grid{grid-template-columns:1fr}.hero{min-height:auto;padding:56px 0}.cards-grid{grid-template-columns:1fr 1fr}.lead-form{grid-template-columns:1fr}.price-card.featured{transform:none}}@media (max-width:640px){.nav-shell{height:66px}.nav-cta{display:none}.hero h1{font-size:42px}.cards-grid,.stats-grid,.mini-grid{grid-template-columns:1fr}.hero-panel{min-height:auto}.cta-section{padding:28px}.site-footer{display:grid;gap:14px}.trust-list li{width:100%;text-align:center}.section-block{margin-bottom:58px}}`;
+  const js = `const revealObserver=new IntersectionObserver((entries)=>{for(const entry of entries){if(entry.isIntersecting){entry.target.classList.add('visible');revealObserver.unobserve(entry.target)}}},{threshold:.16});document.querySelectorAll('.reveal').forEach((element)=>revealObserver.observe(element));document.querySelectorAll('a[href^="#"]').forEach((link)=>{link.addEventListener('click',(event)=>{const target=document.querySelector(link.getAttribute('href'));if(target){event.preventDefault();target.scrollIntoView({behavior:'smooth',block:'start'})}})});document.querySelector('.lead-form')?.addEventListener('submit',(event)=>{event.preventDefault();const button=event.currentTarget.querySelector('button');const original=button.textContent;button.textContent='Recebido com sucesso';button.disabled=true;setTimeout(()=>{button.textContent=original;button.disabled=false;event.currentTarget.reset()},1800)});`;
+  return [
+    { path: "index.html", language: "html", content: html },
+    { path: "styles.css", language: "css", content: css },
+    { path: "script.js", language: "javascript", content: js },
+  ];
+}
+
 async function routeModel(supabase, modelId, hasSubscription) {
   const requestedModel = MODEL_IDS.has(modelId) ? modelId : "forza-1-flash";
   const deepSeekKey = process.env.DEEPSEEK_API_KEY;
@@ -578,6 +678,12 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
     const firstGateReport = deterministicQualityReport(project, job, files);
     if (!firstGateReport.passed) {
       files = await repairFilesForQuality(supabase, model, run, job, project, plans, files, firstGateReport);
+      const repairedGateReport = deterministicQualityReport(project, job, files);
+      if (!repairedGateReport.passed) {
+        await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: aplicando fallback premium seguro…");
+        await saveArtifact(supabase, run.id, "quality_gate_report", { fallback: "deterministic_premium", beforeRepair: firstGateReport, afterRepair: repairedGateReport });
+        files = deterministicPremiumFiles(project, job, plans, repairedGateReport.issues || []);
+      }
     }
     const validationReport = await validateFiles(supabase, model, run, job, project, plans, files);
     await setPhase(supabase, job.id, run.id, "finalize", "Forza Engine: salvando versão final…");
