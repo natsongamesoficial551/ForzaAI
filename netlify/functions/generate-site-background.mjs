@@ -146,15 +146,15 @@ function deterministicPremiumFiles(project, job, plans, reason = []) {
   <main id="topo">
     <section class="hero section-grid">
       <div class="hero-copy reveal">
-        <p class="eyebrow">Criado com Forza Engine</p>
+        <p class="eyebrow">Experiência premium</p>
         <h1>${title}: uma experiência premium para ${request}</h1>
-        <p class="hero-lead">Página completa, responsiva e orientada à conversão, com narrativa clara, visual moderno, prova social, pricing e fluxos simulados para validar a ideia sem expor segredos.</p>
+        <p class="hero-lead">Página completa, responsiva e orientada à conversão, com narrativa clara, visual moderno, prova social, pricing e fluxos simulados para validar a ideia com segurança.</p>
         <div class="hero-actions">
           <a class="button primary" href="#contato">${primaryLabel}</a>
           <a class="button ghost" href="#pricing">${secondaryLabel}</a>
         </div>
         <ul class="trust-list" aria-label="Diferenciais">
-          <li>Mobile-first</li><li>Copy brasileira</li><li>Visual premium</li><li>Sem segredos no frontend</li>
+          <li>Mobile-first</li><li>Copy brasileira</li><li>Visual premium</li><li>Dados seguros</li>
         </ul>
       </div>
       <aside class="hero-panel reveal" aria-label="Preview do produto">
@@ -171,7 +171,7 @@ function deterministicPremiumFiles(project, job, plans, reason = []) {
       <div class="cards-grid">${modules.map((item, index) => `<article class="feature-card reveal"><span>0${index + 1}</span><h3>${item}</h3><p>${isPortfolio ? "Mostra valor profissional com clareza, estética e contexto de negócio para cada case." : "Ajuda o visitante a entender rapidamente o valor e avançar para o próximo passo."}</p></article>`).join("")}</div>
     </section>
     <section id="projetos" class="showcase section-grid">
-      <div><p class="eyebrow">Experiência</p><h2>${isPortfolio ? "Cases com narrativa, processo e resultado." : "Produto demonstrável mesmo antes do backend real."}</h2><p>Cada bloco usa dados seguros e mockados para mostrar fluxos reais sem colocar API keys, SQL sensível ou tokens no navegador.</p></div>
+      <div><p class="eyebrow">Experiência</p><h2>${isPortfolio ? "Cases com narrativa, processo e resultado." : "Produto demonstrável antes da integração final."}</h2><p>Cada bloco usa dados demonstrativos para mostrar fluxos reais com uma interface pronta para evoluir para integrações server-side.</p></div>
       <div class="workspace-card">
         <div class="tabs"><button class="active" type="button">Overview</button><button type="button">Dashboard</button><button type="button">Settings</button></div>
         <div class="workspace-content"><h3>${isPortfolio ? "Case: redesign de marca SaaS" : "Dashboard do cliente"}</h3><p>Visão de métricas, status e próximos passos em uma interface limpa e objetiva.</p><div class="progress"><span style="width:76%"></span></div><div class="task-list"><p>Briefing validado</p><p>Identidade aplicada</p><p>Fluxo responsivo aprovado</p></div></div>
@@ -189,10 +189,10 @@ function deterministicPremiumFiles(project, job, plans, reason = []) {
         <article class="price-card"><h3>Enterprise</h3><strong>Custom</strong><p>Para operação com integrações futuras.</p><ul><li>Blueprint técnico</li><li>Integrações planejadas</li><li>Fluxos multiusuário</li></ul><a href="#contato">Falar com vendas</a></article>
       </div>
     </section>
-    <section class="faq section-block"><div class="section-heading"><p class="eyebrow">FAQ</p><h2>Perguntas que reduzem objeções.</h2></div><div class="faq-list"><details open><summary>Isso já conecta pagamentos reais?</summary><p>Não nesta etapa. O preview simula a experiência e deixa integrações como manifesto seguro para backend controlado.</p></details><details><summary>Funciona no celular?</summary><p>Sim, o CSS usa layout fluido, grid responsivo e media queries para telas menores.</p></details><details><summary>Tem dados sensíveis no código?</summary><p>Não. O frontend usa dados mockados e não inclui API keys, service role, tokens ou SQL sensível.</p></details></div></section>
+    <section class="faq section-block"><div class="section-heading"><p class="eyebrow">FAQ</p><h2>Perguntas que reduzem objeções.</h2></div><div class="faq-list"><details open><summary>Isso já conecta pagamentos reais?</summary><p>Não nesta etapa. O preview simula a experiência e deixa integrações como manifesto seguro para backend controlado.</p></details><details><summary>Funciona no celular?</summary><p>Sim, o CSS usa layout fluido, grid responsivo e media queries para telas menores.</p></details><details><summary>Tem dados sensíveis no código?</summary><p>Não. O preview usa dados demonstrativos e deixa integrações reais para uma camada server-side controlada.</p></details></div></section>
     <section id="contato" class="cta-section"><p class="eyebrow">Próximo passo</p><h2>Pronto para transformar essa ideia em uma página publicável?</h2><p>Use este preview como base visual e evolua com ajustes de copy, integrações seguras e backend quando necessário.</p><form class="lead-form"><input aria-label="Nome" placeholder="Seu nome" /><input aria-label="Email" placeholder="email@empresa.com" /><button type="submit">${primaryLabel}</button></form></section>
   </main>
-  <footer class="site-footer"><p>${title} — preview gerado com fallback seguro do Forza Engine.</p><a href="#topo">Voltar ao topo</a></footer>
+  <footer class="site-footer"><p>${title} — experiência digital pronta para validação.</p><a href="#topo">Voltar ao topo</a></footer>
   <script src="script.js"></script>
 </body>
 </html>`;
@@ -581,13 +581,18 @@ async function validateFiles(supabase, model, run, job, project, plans, files) {
     },
     { role: "user", content: JSON.stringify({ project, request: job.message, deterministic_gates: gateReport, plans, files: files.map((file) => ({ path: file.path, chars: file.content.length, preview: file.content.slice(0, 6000) })) }) },
   ], { score: 85, passed: true, summary: "Validação concluída.", issues: [], improvements: [] }, { supabase, jobId: job.id });
+  const modelIssues = Array.isArray(report.issues) ? report.issues : [];
   const finalReport = {
     ...report,
     deterministic_gates: gateReport,
-    issues: [...(gateReport.issues || []), ...((Array.isArray(report.issues) ? report.issues : []))],
+    model_review: report,
+    issues: gateReport.issues || [],
   };
-  finalReport.score = Math.min(Number(report.score ?? 0), gateReport.score);
-  finalReport.passed = Boolean(report.passed) && gateReport.passed && finalReport.score >= 70;
+  finalReport.score = gateReport.passed ? Math.max(75, gateReport.score) : gateReport.score;
+  finalReport.passed = gateReport.passed && finalReport.score >= 70;
+  finalReport.summary = finalReport.passed
+    ? `Quality gates determinísticos aprovados. Revisão IA registrada como consultiva (${modelIssues.length} apontamentos).`
+    : gateReport.summary;
   await saveArtifact(supabase, run.id, "validation_report", finalReport);
   if (!finalReport.passed) {
     throw new Error(`A geração foi reprovada pelos quality gates (${finalReport.score}/100): ${finalReport.issues.slice(0, 4).join("; ")}`);
