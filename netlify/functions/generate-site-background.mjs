@@ -308,10 +308,11 @@ async function fetchAiText(model, body, context = {}) {
       clearTimeout(timeout);
     }
 
-    if (response.status === 429 && attempt < maxAttempts) {
-      const waitMs = retryAfterMs(response, attempt * 30_000);
+    if ((response.status === 429 || response.status === 502 || response.status === 503 || response.status === 504) && attempt < maxAttempts) {
+      const waitMs = retryAfterMs(response, response.status === 429 ? attempt * 30_000 : attempt * 20_000);
+      const reason = response.status === 429 ? "limite do provedor atingido" : `gateway/timeout do provedor (${response.status})`;
       await updateJob(context.supabase, context.jobId, {
-        stage: `Forza Engine: limite do provedor atingido; aguardando ${Math.round(waitMs / 1000)}s antes de tentar novamente (${attempt}/${maxAttempts - 1})…`,
+        stage: `Forza Engine: ${reason}; aguardando ${Math.round(waitMs / 1000)}s antes de tentar novamente (${attempt}/${maxAttempts - 1})…`,
       });
       await sleep(waitMs);
       continue;
@@ -324,7 +325,7 @@ async function fetchAiText(model, body, context = {}) {
       if (response.status === 400) throw new Error(`Configuração inválida no provedor ${model.label}: confira endpoint, parâmetros e se o modelo upstream "${model.upstreamModel}" existe. Detalhe: ${text.slice(0, 240)}`);
       if (response.status === 404) throw new Error(`Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`);
       if (response.status === 429) throw new Error(`Limite do provedor ${model.label} atingido mesmo após ${maxAttempts - 1} tentativas. Aguarde alguns minutos ou use outro modelo.`);
-      if (response.status === 502 || /bad gateway|<html/i.test(text)) throw new Error(`O provedor ${model.label} retornou gateway/instabilidade (${response.status}). Isso costuma ser falha upstream ou congestionamento do modelo "${model.upstreamModel}"; tente novamente ou use um modelo menor. Detalhe: ${text.replace(/\s+/g, " ").slice(0, 180)}`);
+      if (response.status === 502 || response.status === 503 || response.status === 504 || /bad gateway|gateway timeout|<html/i.test(text)) throw new Error(`O provedor ${model.label} retornou gateway/instabilidade (${response.status}) mesmo após ${maxAttempts - 1} tentativas. Isso costuma ser falha upstream ou congestionamento do modelo "${model.upstreamModel}"; tente novamente ou use um modelo menor. Detalhe: ${text.replace(/\s+/g, " ").slice(0, 180)}`);
       throw new Error(`Falha no provedor ${model.label} (${response.status}): ${text.slice(0, 240)}`);
     }
 
@@ -467,25 +468,35 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
   for (const task of tasks) {
     await updateTask(supabase, task.id, { status: "running" });
     await updateJob(supabase, job.id, { stage: `Forza Engine: ${task.title}` });
-    const content = await fetchAiText(model, {
-      stream: false,
-      temperature: 0.1,
-      messages: [
-        {
-          role: "system",
-          content: "Você é o implementador principal do ForzaAI. Aplique a task no projeto e retorne SEMPRE os três arquivos completos, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nMantenha tudo coeso, responsivo, acessível e com visual premium. Para SaaS, simule produto completo: landing, auth visual, dashboard, onboarding, planos, settings, dados mockados e estados reais. Segurança obrigatória: não use eval, innerHTML com dados variáveis, scripts remotos desconhecidos, API keys, service role, SQL ou endpoints sensíveis no código gerado.",
-        },
-        {
-          role: "user",
-          content: `Projeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${skillsContext || "—"}\nPlanos:\n${JSON.stringify(plans)}\n\nTask atual: ${task.title}\n${task.description}\n\nArquivos atuais de trabalho:\n${filesContext(workingFiles)}`,
-        },
-      ],
-    }, { supabase, jobId: job.id });
+    let content = "";
+    try {
+      content = await fetchAiText(model, {
+        stream: false,
+        temperature: 0.1,
+        messages: [
+          {
+            role: "system",
+            content: "Você é o implementador principal do ForzaAI. Aplique a task no projeto e retorne SEMPRE os três arquivos completos, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nMantenha tudo coeso, responsivo, acessível e com visual premium. Para SaaS, simule produto completo: landing, auth visual, dashboard, onboarding, planos, settings, dados mockados e estados reais. Segurança obrigatória: não use eval, innerHTML com dados variáveis, scripts remotos desconhecidos, API keys, service role, SQL ou endpoints sensíveis no código gerado.",
+          },
+          {
+            role: "user",
+            content: `Projeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${skillsContext || "—"}\nPlanos:\n${JSON.stringify(plans)}\n\nTask atual: ${task.title}\n${task.description}\n\nArquivos atuais de trabalho:\n${filesContext(workingFiles)}`,
+          },
+        ],
+      }, { supabase, jobId: job.id });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await updateTask(supabase, task.id, { status: "failed", error: message });
+      await saveArtifact(supabase, run.id, "model_raw_output", { taskId: task.id, title: task.title, failed: true, error: message });
+      if (workingFiles.length) break;
+      return deterministicPremiumFiles(project, job, plans, [message]);
+    }
     const parsed = normalizeGeneratedFiles(content, project.name);
     await saveArtifact(supabase, run.id, "model_raw_output", { taskId: task.id, title: task.title, content: content.slice(0, 120_000) });
     if (!parsed) {
       await updateTask(supabase, task.id, { status: "failed", error: "A IA não retornou arquivos suficientes." });
-      throw new Error(`A task ${task.title} não retornou arquivos suficientes.`);
+      if (workingFiles.length) break;
+      return deterministicPremiumFiles(project, job, plans, ["A IA não retornou arquivos suficientes."]);
     }
     workingFiles = parsed;
     await updateTask(supabase, task.id, {
