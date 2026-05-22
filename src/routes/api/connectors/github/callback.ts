@@ -51,7 +51,7 @@ export const Route = createFileRoute("/api/connectors/github/callback")({
           const url = new URL(request.url);
           const code = url.searchParams.get("code");
           const state = url.searchParams.get("state");
-          if (!code || !state) callbackRedirect(request, { error: "github_oauth" });
+          if (!code || !state) return callbackRedirect(request, { error: "github_oauth" });
 
           const userId = await verifyGithubOAuthState(state);
           const token = await exchangeCodeForToken(code, request);
@@ -83,10 +83,10 @@ export const Route = createFileRoute("/api/connectors/github/callback")({
           );
           if (error) throw error;
 
-          callbackRedirect(request, { connected: "github" });
+          return callbackRedirect(request, { connected: "github" });
         } catch (error) {
           console.error("GitHub OAuth callback failed", error);
-          callbackRedirect(request, { error: "github_oauth" });
+          return callbackRedirect(request, { error: "github_oauth" });
         }
       },
     },
