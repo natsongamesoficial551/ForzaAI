@@ -6,6 +6,7 @@ import { Database, Github, KeyRound, Plug, Shield, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
+  completeGithubOAuth,
   deleteConnectorSecret,
   getCustomAiTokenBalance,
   listConnectors,
@@ -73,6 +74,7 @@ function Connectors() {
   const deleteConnectorSecretFn = useServerFn(deleteConnectorSecret);
   const getCustomAiTokenBalanceFn = useServerFn(getCustomAiTokenBalance);
   const startGithubOAuthFn = useServerFn(startGithubOAuth);
+  const completeGithubOAuthFn = useServerFn(completeGithubOAuth);
 
   const { data: saved } = useQuery({
     queryKey: ["connectors"],
@@ -95,11 +97,27 @@ function Connectors() {
   const callbackConnected = callbackParams?.get("connected");
   const callbackError = callbackParams?.get("error");
   const callbackReason = callbackParams?.get("reason");
+  const githubCode = callbackParams?.get("code");
+  const githubState = callbackParams?.get("state");
+
+  const completeGithubOAuthMutation = useMutation({
+    mutationFn: async ({ code, state }: { code: string; state: string }) => completeGithubOAuthFn({ data: { code, state } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["connectors"] });
+      toast.success("GitHub conectado com segurança");
+      window.history.replaceState({}, "", "/connectors?connected=github");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   useEffect(() => {
+    if (githubCode && githubState && !completeGithubOAuthMutation.isPending && !completeGithubOAuthMutation.isSuccess) {
+      completeGithubOAuthMutation.mutate({ code: githubCode, state: githubState });
+      return;
+    }
     if (callbackConnected === "github") toast.success("GitHub conectado com segurança");
     if (callbackError === "github_oauth") toast.error(`Não consegui concluir o OAuth do GitHub${callbackReason ? ` (${callbackReason})` : ""}`);
-  }, [callbackConnected, callbackError, callbackReason]);
+  }, [callbackConnected, callbackError, callbackReason, completeGithubOAuthMutation, githubCode, githubState]);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => deleteConnectorSecretFn({ data: { id } }),

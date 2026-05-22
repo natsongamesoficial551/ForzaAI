@@ -71,6 +71,71 @@ const SaveConnectorSchema = z.object({
 });
 
 const DeleteConnectorSchema = z.object({ id: z.string().uuid() });
+const CompleteGithubOAuthSchema = z.object({
+  code: z.string().min(10).max(500),
+  state: z.string().min(20).max(2000),
+});
+
+async function exchangeGithubCodeForToken(code: string, requestOrigin?: string) {
+  const redirectUri = githubRedirectUri(requestOrigin);
+  const response = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      client_id: getServerEnv("GITHUB_OAUTH_CLIENT_ID"),
+      client_secret: getServerEnv("GITHUB_OAUTH_CLIENT_SECRET"),
+      code,
+      redirect_uri: redirectUri,
+    }),
+  });
+  const token = await response.json() as { access_token?: string; scope?: string; token_type?: string; error?: string };
+  if (!response.ok || !token.access_token || token.error) throw new Error("GitHub OAuth token exchange failed");
+  return token;
+}
+
+async function getGithubUser(accessToken: string) {
+  const response = await fetch("https://api.github.com/user", {
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${accessToken}`,
+      "x-github-api-version": "2022-11-28",
+    },
+  });
+  const user = await response.json() as { id?: number; login?: string; name?: string; avatar_url?: string; html_url?: string };
+  if (!response.ok || !user.id || !user.login) throw new Error("GitHub user lookup failed");
+  return user;
+}
+
+async function saveGithubConnection(supabase: any, userId: string, code: string, requestOrigin?: string) {
+  const token = await exchangeGithubCodeForToken(code, requestOrigin);
+  const githubUser = await getGithubUser(token.access_token);
+  const encryptedValue = await encryptSecret(token.access_token);
+  const { error } = await supabase.from("encrypted_user_secrets").upsert(
+    {
+      user_id: userId,
+      provider: "github",
+      secret_name: githubUser.login,
+      encrypted_value: encryptedValue,
+      metadata: {
+        accountLogin: githubUser.login,
+        githubUserId: githubUser.id,
+        name: githubUser.name ?? null,
+        avatarUrl: githubUser.avatar_url ?? null,
+        profileUrl: githubUser.html_url ?? null,
+        scopes: token.scope?.split(",").filter(Boolean) ?? [],
+        tokenType: token.token_type ?? "bearer",
+        connectedAt: new Date().toISOString(),
+      },
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id,provider,secret_name" },
+  );
+  if (error) throw error;
+  return { accountLogin: githubUser.login };
+}
 
 export const listConnectors = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -136,6 +201,17 @@ export const startGithubOAuth = createServerFn({ method: "POST" })
     url.searchParams.set("state", state);
     url.searchParams.set("allow_signup", "true");
     return { url: url.toString() };
+  });
+
+export const completeGithubOAuth = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => CompleteGithubOAuthSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const stateUserId = await verifyGithubOAuthState(data.state);
+    if (stateUserId !== context.userId) throw new Error("GitHub OAuth state does not match current user");
+    const request = getRequest();
+    const requestOrigin = request?.url ? new URL(request.url).origin : undefined;
+    return saveGithubConnection(context.supabase, context.userId, data.code, requestOrigin);
   });
 
 export const getCustomAiTokenBalance = createServerFn({ method: "GET" })
