@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
+import { useEffect } from "react";
 import { Database, Github, KeyRound, Plug, Shield, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -83,6 +84,19 @@ function Connectors() {
     queryFn: () => getCustomAiTokenBalanceFn(),
   });
 
+  const savedConnectors = saved ?? [];
+  const connectedConnectors = connectors.flatMap((connector) =>
+    savedConnectors
+      .filter((item: any) => item.provider === connector.id)
+      .map((item: any) => ({ ...item, connector })),
+  );
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("connected") === "github") toast.success("GitHub conectado com segurança");
+    if (params.get("error") === "github_oauth") toast.error("Não consegui concluir o OAuth do GitHub");
+  }, []);
+
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => deleteConnectorSecretFn({ data: { id } }),
     onSuccess: () => {
@@ -148,14 +162,59 @@ function Connectors() {
         </p>
       </div>
 
+      <div className="rounded-2xl border border-border bg-card p-6 mb-6">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="font-display text-xl font-semibold">Conectores conectados</h2>
+            <p className="text-sm text-muted-foreground mt-1">Serviços já autorizados pela sua conta para uso seguro no backend do ForzaAI.</p>
+          </div>
+          <span className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+            {connectedConnectors.length} conectado(s)
+          </span>
+        </div>
+        <div className="mt-4 space-y-2">
+          {connectedConnectors.length > 0 ? (
+            connectedConnectors.map((item: any) => {
+              const Icon = item.connector.icon;
+              return (
+                <div key={item.id} className="flex items-center justify-between rounded-xl border border-border bg-background/60 p-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="size-9 rounded-lg bg-primary/10 grid place-items-center shrink-0">
+                      <Icon className="size-4 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">{item.connector.name} conectado</div>
+                      <div className="text-xs text-muted-foreground truncate">{item.secret_name}</div>
+                    </div>
+                  </div>
+                  <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(item.id)}>
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
+              );
+            })
+          ) : (
+            <div className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
+              Nenhum conector conectado ainda. Quando o OAuth terminar com sucesso, ele aparecerá aqui.
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="grid md:grid-cols-2 gap-4">
         {connectors.map((connector) => {
           const Icon = connector.icon;
-          const rows = (saved ?? []).filter((item: any) => item.provider === connector.id);
+          const rows = savedConnectors.filter((item: any) => item.provider === connector.id);
+          const isConnected = rows.length > 0;
           return (
             <div key={connector.name} className="rounded-2xl border border-border bg-card p-6">
-              <div className="size-11 rounded-xl bg-primary/10 grid place-items-center mb-4">
-                <Icon className="size-5 text-primary" />
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div className="size-11 rounded-xl bg-primary/10 grid place-items-center">
+                  <Icon className="size-5 text-primary" />
+                </div>
+                <span className={isConnected ? "rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-600" : "rounded-full border border-border bg-background/60 px-2.5 py-1 text-xs text-muted-foreground"}>
+                  {isConnected ? "Conectado" : connector.status}
+                </span>
               </div>
               <h2 className="font-display text-xl font-semibold">{connector.name}</h2>
               <p className="text-sm text-muted-foreground mt-2">{connector.description}</p>
