@@ -1,7 +1,6 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { ArrowUp, ExternalLink, Globe, Loader2, Sparkles } from "lucide-react";
+import { ExternalLink, Globe, Loader2, Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
@@ -11,7 +10,6 @@ export const Route = createFileRoute("/_authenticated/projects/")({ component: P
 function Projects() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [prompt, setPrompt] = useState("");
   const [launching, setLaunching] = useState(false);
 
   const { data: projects, isLoading, error } = useQuery({
@@ -28,25 +26,19 @@ function Projects() {
   });
 
   const handleCreateProject = async () => {
-    const p = prompt.trim();
-    if (p.length < 6) return toast.error("Descreva o projeto que você quer criar.");
     setLaunching(true);
-    const guessedName = p.split(/[.,\n]/)[0].slice(0, 60) || "Novo site";
+    const projectName = `Novo projeto ${new Date().toLocaleDateString("pt-BR")}`;
     const { data, error } = await supabase.rpc("create_user_project", {
-      _name: guessedName,
+      _name: projectName,
       _site_type: "landing-page",
-      _description: p,
+      _description: null,
     });
     setLaunching(false);
     if (error || !data) {
       toast.error(error?.message ?? "Não consegui criar o projeto");
       return;
     }
-    try {
-      sessionStorage.setItem(`initial-prompt:${data.id}`, p);
-    } catch {}
     queryClient.invalidateQueries({ queryKey: ["projects"] });
-    setPrompt("");
     router.navigate({ to: "/projects/$projectId", params: { projectId: data.id } });
   };
 
@@ -56,49 +48,31 @@ function Projects() {
         <div>
           <h1 className="font-display text-3xl font-bold">Projetos</h1>
           <p className="text-muted-foreground mt-1">
-            Veja, abra ou crie um projeto do zero sem passar pelo Dashboard.
+            Veja seus projetos e crie um workspace novo para conversar com a IA.
           </p>
         </div>
-        <Button asChild variant="outline">
-          <Link to="/dashboard">Ir para Dashboard</Link>
+        <Button onClick={handleCreateProject} disabled={launching} className="bg-gradient-primary shadow-glow">
+          {launching ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+          Criar projeto
         </Button>
       </div>
 
-      <div className="mt-8 rounded-[2rem] border border-border bg-gradient-to-br from-card via-card to-primary/5 p-5 md:p-8 shadow-elegant">
+      <div className="mt-8 rounded-[2rem] border border-border bg-gradient-to-br from-card via-card to-primary/5 p-6 md:p-8 shadow-elegant flex flex-col md:flex-row md:items-center md:justify-between gap-5">
         <div className="max-w-3xl">
           <div className="inline-flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-            <Sparkles className="size-3.5 text-primary" /> Novo projeto
+            <Sparkles className="size-3.5 text-primary" /> Novo workspace
           </div>
           <h2 className="font-display text-2xl md:text-4xl font-semibold mt-3 tracking-tight">
-            Descreva o que quer construir
+            Comece um projeto limpo
           </h2>
           <p className="text-sm text-muted-foreground mt-2">
-            O ForzaAI cria o projeto, abre o workspace e inicia o Plan automaticamente.
+            Crie o projeto agora e descreva o que quer construir no chat com preview, código e Build.
           </p>
         </div>
-        <div className="mt-6 relative rounded-3xl border border-border bg-background/80 focus-within:border-primary/60 focus-within:shadow-glow transition">
-          <textarea
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                if (!launching) handleCreateProject();
-              }
-            }}
-            placeholder="Ex: Quero um site institucional moderno para uma clínica odontológica em São Paulo…"
-            rows={4}
-            className="w-full resize-none bg-transparent px-5 py-5 pr-16 text-sm md:text-base outline-none placeholder:text-muted-foreground"
-          />
-          <Button
-            size="icon"
-            onClick={handleCreateProject}
-            disabled={launching || prompt.trim().length < 6}
-            className="absolute bottom-4 right-4 size-10 rounded-2xl bg-gradient-primary shadow-glow"
-          >
-            {launching ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
-          </Button>
-        </div>
+        <Button size="lg" onClick={handleCreateProject} disabled={launching} className="bg-gradient-primary shadow-glow shrink-0">
+          {launching ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+          Criar projeto
+        </Button>
       </div>
 
       {error && (
@@ -154,7 +128,7 @@ function Projects() {
               <Sparkles className="size-6 text-primary" />
             </div>
             <h3 className="font-display text-xl font-semibold mt-4">Nenhum projeto ainda</h3>
-            <p className="text-sm text-muted-foreground mt-1">Crie o primeiro projeto usando o chat do Dashboard.</p>
+            <p className="text-sm text-muted-foreground mt-1">Clique em Criar projeto para abrir um workspace novo.</p>
           </div>
         )}
       </div>
