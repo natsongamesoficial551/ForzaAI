@@ -8,6 +8,7 @@ import {
   deleteConnectorSecret,
   getCustomAiTokenBalance,
   listConnectors,
+  startGithubOAuth,
 } from "@/lib/connectors.functions";
 
 export const Route = createFileRoute("/_authenticated/connectors")({ component: Connectors });
@@ -70,6 +71,7 @@ function Connectors() {
   const listConnectorsFn = useServerFn(listConnectors);
   const deleteConnectorSecretFn = useServerFn(deleteConnectorSecret);
   const getCustomAiTokenBalanceFn = useServerFn(getCustomAiTokenBalance);
+  const startGithubOAuthFn = useServerFn(startGithubOAuth);
 
   const { data: saved } = useQuery({
     queryKey: ["connectors"],
@@ -89,6 +91,22 @@ function Connectors() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  const githubOAuthMutation = useMutation({
+    mutationFn: async () => startGithubOAuthFn(),
+    onSuccess: ({ url }) => {
+      window.location.href = url;
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const handleConnectorClick = (connector: (typeof connectors)[number]) => {
+    if (connector.id === "github") {
+      githubOAuthMutation.mutate();
+      return;
+    }
+    toast.info(`${connector.name} OAuth será ativado quando o app oficial estiver configurado com segurança no backend.`);
+  };
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
@@ -110,7 +128,8 @@ function Connectors() {
               key={connector.id}
               variant="outline"
               className="h-auto justify-start gap-3 p-4"
-              onClick={() => toast.info(`${connector.name} OAuth será ativado quando o app oficial estiver configurado com segurança no backend.`)}
+              onClick={() => handleConnectorClick(connector)}
+              disabled={connector.id === "github" && githubOAuthMutation.isPending}
             >
               <connector.icon className="size-5 text-primary" />
               <span className="text-left">

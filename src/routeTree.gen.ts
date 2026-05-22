@@ -25,6 +25,7 @@ import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedProjectsIndexRouteImport } from './routes/_authenticated/projects.index'
 import { Route as AuthenticatedProjectsProjectIdRouteImport } from './routes/_authenticated/projects.$projectId'
 import { Route as ApiPublicPaymentsWebhookRouteImport } from './routes/api/public/payments/webhook'
+import { Route as ApiConnectorsGithubCallbackRouteImport } from './routes/api/connectors/github/callback'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -109,6 +110,12 @@ const ApiPublicPaymentsWebhookRoute =
     path: '/api/public/payments/webhook',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiConnectorsGithubCallbackRoute =
+  ApiConnectorsGithubCallbackRouteImport.update({
+    id: '/api/connectors/github/callback',
+    path: '/api/connectors/github/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -125,6 +132,7 @@ export interface FileRoutesByFullPath {
   '/s/$slug': typeof SSlugRoute
   '/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
   '/projects/': typeof AuthenticatedProjectsIndexRoute
+  '/api/connectors/github/callback': typeof ApiConnectorsGithubCallbackRoute
   '/api/public/payments/webhook': typeof ApiPublicPaymentsWebhookRoute
 }
 export interface FileRoutesByTo {
@@ -142,6 +150,7 @@ export interface FileRoutesByTo {
   '/s/$slug': typeof SSlugRoute
   '/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
   '/projects': typeof AuthenticatedProjectsIndexRoute
+  '/api/connectors/github/callback': typeof ApiConnectorsGithubCallbackRoute
   '/api/public/payments/webhook': typeof ApiPublicPaymentsWebhookRoute
 }
 export interface FileRoutesById {
@@ -161,6 +170,7 @@ export interface FileRoutesById {
   '/s/$slug': typeof SSlugRoute
   '/_authenticated/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
   '/_authenticated/projects/': typeof AuthenticatedProjectsIndexRoute
+  '/api/connectors/github/callback': typeof ApiConnectorsGithubCallbackRoute
   '/api/public/payments/webhook': typeof ApiPublicPaymentsWebhookRoute
 }
 export interface FileRouteTypes {
@@ -180,6 +190,7 @@ export interface FileRouteTypes {
     | '/s/$slug'
     | '/projects/$projectId'
     | '/projects/'
+    | '/api/connectors/github/callback'
     | '/api/public/payments/webhook'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -197,6 +208,7 @@ export interface FileRouteTypes {
     | '/s/$slug'
     | '/projects/$projectId'
     | '/projects'
+    | '/api/connectors/github/callback'
     | '/api/public/payments/webhook'
   id:
     | '__root__'
@@ -215,6 +227,7 @@ export interface FileRouteTypes {
     | '/s/$slug'
     | '/_authenticated/projects/$projectId'
     | '/_authenticated/projects/'
+    | '/api/connectors/github/callback'
     | '/api/public/payments/webhook'
   fileRoutesById: FileRoutesById
 }
@@ -224,6 +237,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   CheckoutReturnRoute: typeof CheckoutReturnRoute
   SSlugRoute: typeof SSlugRoute
+  ApiConnectorsGithubCallbackRoute: typeof ApiConnectorsGithubCallbackRoute
   ApiPublicPaymentsWebhookRoute: typeof ApiPublicPaymentsWebhookRoute
 }
 
@@ -341,6 +355,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicPaymentsWebhookRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/connectors/github/callback': {
+      id: '/api/connectors/github/callback'
+      path: '/api/connectors/github/callback'
+      fullPath: '/api/connectors/github/callback'
+      preLoaderRoute: typeof ApiConnectorsGithubCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -380,6 +401,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   CheckoutReturnRoute: CheckoutReturnRoute,
   SSlugRoute: SSlugRoute,
+  ApiConnectorsGithubCallbackRoute: ApiConnectorsGithubCallbackRoute,
   ApiPublicPaymentsWebhookRoute: ApiPublicPaymentsWebhookRoute,
 }
 export const routeTree = rootRouteImport
