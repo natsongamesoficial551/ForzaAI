@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Github, KeyRound, Plug, Shield, Trash2 } from "lucide-react";
+import { Database, Github, KeyRound, Plug, Shield, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,49 +14,54 @@ export const Route = createFileRoute("/_authenticated/connectors")({ component: 
 
 const connectors = [
   {
+    id: "supabase",
+    name: "Banco de dados",
+    description: "Supabase/Postgres para a IA ler schema, propor migrations, preparar RLS e configurar tabelas com aprovação segura.",
+    icon: Database,
+    status: "Preparando OAuth seguro",
+    action: "Conectar banco de dados",
+    enabled: true,
+    capabilities: ["Ler schema", "Propor tabelas", "Planejar RLS", "Validar migrations"],
+  },
+  {
     id: "github",
     name: "GitHub",
-    description: "OAuth gratuito para repositórios, commits e exportação de código quando o app GitHub estiver configurado.",
+    description: "OAuth gratuito para repositórios, branches, commits, pull requests e exportação de código quando o app oficial estiver configurado.",
     icon: Github,
     status: "Pronto para OAuth",
     action: "Conectar GitHub",
     enabled: true,
+    capabilities: ["Criar repositório", "Gerar branch", "Commitar arquivos", "Abrir PR"],
   },
   {
     id: "stripe",
     name: "Stripe",
-    description: "OAuth gratuito para conectar pagamentos, checkout, Pix e assinaturas via conta Stripe do cliente.",
+    description: "Stripe Connect OAuth para produtos, preços, checkout, Pix, assinaturas e billing usando a conta Stripe do cliente.",
     icon: KeyRound,
     status: "Pronto para OAuth",
     action: "Conectar Stripe",
     enabled: true,
-  },
-  {
-    id: "supabase",
-    name: "Supabase",
-    description: "OAuth público não está liberado nesta fase; a integração manual fica oculta para não confundir usuários.",
-    icon: Shield,
-    status: "Oculto até integração gratuita viável",
-    action: "Indisponível nesta fase",
-    enabled: false,
+    capabilities: ["Criar produtos", "Criar preços", "Configurar checkout", "Planejar webhooks"],
   },
   {
     id: "figma",
     name: "Figma",
-    description: "Fica oculto até confirmar OAuth gratuito e configurar o app oficial do ForzaAI.",
+    description: "Importação futura de design, tokens visuais e assets quando o app OAuth oficial do ForzaAI estiver configurado.",
     icon: Plug,
-    status: "Oculto até confirmar plano gratuito",
-    action: "Indisponível nesta fase",
-    enabled: false,
+    status: "OAuth futuro",
+    action: "Conectar Figma",
+    enabled: true,
+    capabilities: ["Importar frames", "Ler estilos", "Mapear componentes", "Extrair assets"],
   },
   {
     id: "custom-ai",
     name: "IA sob demanda",
     description: "A IA do ForzaAI pode ser integrada nos sites gerados quando o cliente pedir chat, PDF, gerador ou outro recurso inteligente.",
-    icon: KeyRound,
-    status: "Usa a API protegida do ForzaAI",
+    icon: Shield,
+    status: "Gerenciada pelo ForzaAI",
     action: "Gerenciada automaticamente",
     enabled: false,
+    capabilities: ["Chat no site", "Analisar PDF", "Gerar conteúdo", "Usar API protegida"],
   },
 ] as const;
 
@@ -90,14 +95,14 @@ function Connectors() {
       <div className="mb-8">
         <h1 className="font-display text-3xl font-bold">Conectores</h1>
         <p className="text-muted-foreground mt-1">
-Integrações gratuitas por OAuth quando disponíveis; qualquer segredo fica protegido no backend.
+          Conecte banco de dados, GitHub, Stripe e ferramentas externas por OAuth seguro. Tokens e segredos nunca aparecem no frontend.
         </p>
       </div>
 
       <div className="rounded-2xl border border-border bg-card p-6 mb-6">
         <h2 className="font-display text-xl font-semibold">Integrações por OAuth</h2>
         <p className="text-sm text-muted-foreground mt-2">
-          O usuário não precisa buscar API key manualmente. GitHub e Stripe ficam como integrações gratuitas por OAuth quando os apps oficiais estiverem configurados nas variáveis privadas da Netlify.
+          A meta é funcionar como Lovable: o usuário autoriza sua própria conta e o ForzaAI executa ações pelo backend com aprovação. Nesta fase, os conectores ficam preparados visualmente sem pedir API key manual.
         </p>
         <div className="grid md:grid-cols-2 gap-3 mt-4">
           {connectors.filter((connector) => connector.enabled).map((connector) => (
@@ -105,7 +110,7 @@ Integrações gratuitas por OAuth quando disponíveis; qualquer segredo fica pro
               key={connector.id}
               variant="outline"
               className="h-auto justify-start gap-3 p-4"
-              onClick={() => toast.info(`${connector.name} OAuth será ativado quando o app oficial estiver configurado.`)}
+              onClick={() => toast.info(`${connector.name} OAuth será ativado quando o app oficial estiver configurado com segurança no backend.`)}
             >
               <connector.icon className="size-5 text-primary" />
               <span className="text-left">
@@ -118,9 +123,9 @@ Integrações gratuitas por OAuth quando disponíveis; qualquer segredo fica pro
       </div>
 
       <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5 mb-6">
-        <h2 className="font-display text-lg font-semibold">IA sob demanda nos sites</h2>
+        <h2 className="font-display text-lg font-semibold">Automação segura da IA</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Quando o cliente pedir chat, analisador de PDF, gerador com IA ou outro recurso inteligente, o ForzaAI poderá gerar a integração usando sua API protegida. Saldo técnico atual: {tokenBalance ?? 0} token(s).
+          No próximo estágio, a IA poderá ler metadados dos conectores e pedir ações como criar tabela, produto Stripe ou commit GitHub. A execução real ficará em server functions com confirmação para ações sensíveis. Saldo técnico de IA sob demanda: {tokenBalance ?? 0} token(s).
         </p>
       </div>
 
@@ -135,6 +140,13 @@ Integrações gratuitas por OAuth quando disponíveis; qualquer segredo fica pro
               </div>
               <h2 className="font-display text-xl font-semibold">{connector.name}</h2>
               <p className="text-sm text-muted-foreground mt-2">{connector.description}</p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {connector.capabilities.map((capability) => (
+                  <span key={capability} className="rounded-full border border-border bg-background/60 px-2.5 py-1 text-xs text-muted-foreground">
+                    {capability}
+                  </span>
+                ))}
+              </div>
               <div className="mt-4 space-y-2">
                 {rows.map((row: any) => (
                   <div key={row.id} className="flex items-center justify-between rounded-lg border border-border p-2 text-sm">
@@ -146,7 +158,7 @@ Integrações gratuitas por OAuth quando disponíveis; qualquer segredo fica pro
                 ))}
                 {rows.length === 0 && (
                   <div className="text-xs text-muted-foreground">
-                    {connector.enabled ? "Nenhuma conexão OAuth ativa." : connector.status}
+                    {connector.enabled ? "Nenhuma conexão OAuth ativa ainda." : connector.status}
                   </div>
                 )}
               </div>
