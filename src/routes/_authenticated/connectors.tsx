@@ -91,11 +91,15 @@ function Connectors() {
       .map((item: any) => ({ ...item, connector })),
   );
 
+  const callbackParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const callbackConnected = callbackParams?.get("connected");
+  const callbackError = callbackParams?.get("error");
+  const callbackReason = callbackParams?.get("reason");
+
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("connected") === "github") toast.success("GitHub conectado com segurança");
-    if (params.get("error") === "github_oauth") toast.error("Não consegui concluir o OAuth do GitHub");
-  }, []);
+    if (callbackConnected === "github") toast.success("GitHub conectado com segurança");
+    if (callbackError === "github_oauth") toast.error(`Não consegui concluir o OAuth do GitHub${callbackReason ? ` (${callbackReason})` : ""}`);
+  }, [callbackConnected, callbackError, callbackReason]);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => deleteConnectorSecretFn({ data: { id } }),
@@ -130,6 +134,18 @@ function Connectors() {
           Conecte banco de dados, GitHub, Stripe e ferramentas externas por OAuth seguro. Tokens e segredos nunca aparecem no frontend.
         </p>
       </div>
+
+      {callbackConnected === "github" && (
+        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 mb-6 text-sm text-emerald-700">
+          GitHub autorizou o ForzaAI. Se a conexão foi salva no backend, ela aparece em Conectores conectados.
+        </div>
+      )}
+
+      {callbackError === "github_oauth" && (
+        <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-4 mb-6 text-sm text-destructive">
+          OAuth do GitHub voltou, mas o backend não conseguiu salvar a conexão. Motivo seguro: {callbackReason ?? "unknown"}.
+        </div>
+      )}
 
       <div className="rounded-2xl border border-border bg-card p-6 mb-6">
         <h2 className="font-display text-xl font-semibold">Integrações por OAuth</h2>

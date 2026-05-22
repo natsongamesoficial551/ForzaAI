@@ -10,6 +10,16 @@ function callbackRedirect(request: Request, search: Record<string, string>) {
   return Response.redirect(url.toString(), 302);
 }
 
+function oauthErrorReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/OAUTH_STATE_SECRET/i.test(message) || /state/i.test(message)) return "state";
+  if (/GITHUB_OAUTH_CLIENT/i.test(message) || /token exchange/i.test(message)) return "token";
+  if (/ENCRYPTION_KEY/i.test(message)) return "encryption";
+  if (/SUPABASE/i.test(message) || /encrypted_user_secrets/i.test(message)) return "database";
+  if (/user lookup/i.test(message)) return "github_user";
+  return "unknown";
+}
+
 async function exchangeCodeForToken(code: string, request: Request) {
   const redirectUri = getOptionalServerEnv("GITHUB_OAUTH_REDIRECT_URI") ?? `${new URL(request.url).origin}/api/connectors/github/callback`;
   const response = await fetch("https://github.com/login/oauth/access_token", {
@@ -86,7 +96,7 @@ export const Route = createFileRoute("/api/connectors/github/callback")({
           return callbackRedirect(request, { connected: "github" });
         } catch (error) {
           console.error("GitHub OAuth callback failed", error);
-          return callbackRedirect(request, { error: "github_oauth" });
+          return callbackRedirect(request, { error: "github_oauth", reason: oauthErrorReason(error) });
         }
       },
     },
