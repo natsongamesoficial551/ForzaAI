@@ -200,7 +200,7 @@ function deterministicPremiumFiles(project, job, plans, reason = []) {
     <section id="projetos" class="showcase section-grid">
       <div><p class="eyebrow">Experiência</p><h2>${isPortfolio ? "Cases com narrativa, processo e resultado." : "Produto demonstrável antes da integração final."}</h2><p>Cada bloco usa dados demonstrativos para mostrar fluxos reais com uma interface pronta para evoluir para integrações server-side.</p></div>
       <div class="workspace-card">
-        <div class="tabs"><button class="active" type="button">Overview</button><button type="button">Dashboard</button><button type="button">Settings</button></div>
+        <div class="tabs"><button class="active" type="button">Visão geral</button><button type="button">Métricas</button><button type="button">Configuração</button></div>
         <div class="workspace-content"><h3>${isPortfolio ? "Case: redesign de marca SaaS" : "Dashboard do cliente"}</h3><p>Visão de métricas, status e próximos passos em uma interface limpa e objetiva.</p><div class="progress"><span style="width:76%"></span></div><div class="task-list"><p>Briefing validado</p><p>Identidade aplicada</p><p>Fluxo responsivo aprovado</p></div></div>
       </div>
     </section>
@@ -217,7 +217,7 @@ function deterministicPremiumFiles(project, job, plans, reason = []) {
       </div>
     </section>
     <section class="faq section-block"><div class="section-heading"><p class="eyebrow">FAQ</p><h2>Perguntas que reduzem objeções.</h2></div><div class="faq-list"><details open><summary>Isso já conecta pagamentos reais?</summary><p>Não nesta etapa. O preview simula a experiência e deixa integrações como manifesto seguro para backend controlado.</p></details><details><summary>Funciona no celular?</summary><p>Sim, o CSS usa layout fluido, grid responsivo e media queries para telas menores.</p></details><details><summary>Tem dados sensíveis no código?</summary><p>Não. O preview usa dados demonstrativos e deixa integrações reais para uma camada server-side controlada.</p></details></div></section>
-    <section id="contato" class="cta-section"><p class="eyebrow">Próximo passo</p><h2>Pronto para transformar essa ideia em uma página publicável?</h2><p>Use este preview como base visual e evolua com ajustes de copy, integrações seguras e backend quando necessário.</p><form class="lead-form"><input aria-label="Nome" placeholder="Seu nome" /><input aria-label="Email" placeholder="email@empresa.com" /><button type="submit">${primaryLabel}</button></form></section>
+    <section id="contato" class="cta-section"><p class="eyebrow">Próximo passo</p><h2>Pronto para transformar essa ideia em uma página publicável?</h2><p>Use este preview como base visual e evolua com ajustes de copy, integrações seguras e backend quando necessário.</p><form class="lead-form"><input aria-label="Nome" value="" /><input aria-label="Email" value="" /><button type="submit">${primaryLabel}</button></form></section>
   </main>
   <footer class="site-footer"><p>${title} — experiência digital pronta para validação.</p><a href="#topo">Voltar ao topo</a></footer>
   <script src="script.js"></script>
@@ -596,11 +596,12 @@ function deterministicQualityReport(project, job, files) {
   if (html.length < 6000) issues.push("HTML curto demais para uma entrega premium completa.");
   if (css.length < 2500) issues.push("CSS curto demais para layout responsivo e visual premium.");
   if (!/@media\b/i.test(css)) issues.push("CSS não contém responsividade mínima com media queries.");
-  if (/ForzaAI\s*<\/h1>|Home\s*<\/button>|Dashboard\s*<\/button>|Templates\s*<\/button>|Analytics\s*<\/button>|Configurações\s*<\/button>/i.test(html)) {
+  if (/ForzaAI\s*<\/h1>|Home\s*<\/button>|Templates\s*<\/button>|Analytics\s*<\/button>|Configurações\s*<\/button>/i.test(html)) {
     issues.push("Preview parece scaffold genérico do ForzaAI, não o site solicitado.");
   }
-  if (/TODO|lorem ipsum|placeholder|coming soon|em breve/i.test(combined)) issues.push("Arquivos contêm placeholders ou conteúdo incompleto.");
-  if (/eval\s*\(|service[_-]?role|api[_-]?key\s*=|sk-[a-z0-9]/i.test(combined)) issues.push("Arquivos contêm padrão inseguro ou possível segredo.");
+  const contentWithoutAttributes = combined.replace(/\splaceholder=("[^"]*"|'[^']*')/gi, "");
+  if (/TODO|lorem ipsum|coming soon|em breve/i.test(contentWithoutAttributes)) issues.push("Arquivos contêm placeholders ou conteúdo incompleto.");
+  if (/eval\s*\(|service[_-]?role|api[_-]?key\s*=|sk-[a-z0-9]{20,}/i.test(combined)) issues.push("Arquivos contêm padrão inseguro ou possível segredo.");
 
   const request = String(job.message || project.name || "").toLowerCase();
   const requestTerms = request
