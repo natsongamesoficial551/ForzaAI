@@ -491,6 +491,29 @@ async function createImplementationTasks(supabase, model, run, job, project, pla
   return created;
 }
 
+async function generateInitialFiles(supabase, model, run, job, project, plans, skillsContext) {
+  await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: gerando entrega completa…");
+  const contract = deliveryContract(project, job, plans);
+  const content = await fetchAiText(model, {
+    stream: false,
+    temperature: 0.1,
+    messages: [
+      {
+        role: "system",
+        content: "Você é o gerador principal do ForzaAI. Gere a entrega completa em UMA resposta, sem dividir em etapas. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: página completa e publicável, específica do briefing, com conteúdo real. Não deixe hero/body vazios. Inclua no mínimo 7 seções reais, 6 headings h1-h3, 1400+ caracteres de texto visível, cards/listas, CTA, FAQ e footer. CSS responsivo com @media. JS seguro e funcional para todos os elementos interativos visíveis: formulário, tema claro/escuro, menu, tabs, filtros, carrinho, modais e FAQ quando existirem. Não use eval, innerHTML com dados variáveis, API keys, SQL sensível ou scripts remotos desconhecidos.",
+      },
+      {
+        role: "user",
+        content: `Contrato obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${skillsContext || "—"}\nPlanos:\n${JSON.stringify(plans)}`,
+      },
+    ],
+  }, { supabase, jobId: job.id });
+  await saveArtifact(supabase, run.id, "model_raw_output", { initialFullGeneration: true, content: content.slice(0, 120_000) });
+  const parsed = normalizeGeneratedFiles(content, project.name);
+  if (!parsed) throw new Error("A IA não retornou os três arquivos completos no formato exigido.");
+  return parsed;
+}
+
 async function implementFiles(supabase, model, run, job, project, plans, tasks, currentFiles, skillsContext) {
   await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: implementando arquivos por tasks…");
   const contract = deliveryContract(project, job, plans);
@@ -804,8 +827,10 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
 
   try {
     const plans = await buildPlans(supabase, model, run, project, job, currentFiles, skillsContext);
-    const tasks = await createImplementationTasks(supabase, model, run, job, project, plans);
-    let files = await implementFiles(supabase, model, run, job, project, plans, tasks, currentFiles, skillsContext);
+    const tasks = currentFiles?.length ? await createImplementationTasks(supabase, model, run, job, project, plans) : [];
+    let files = currentFiles?.length
+      ? await implementFiles(supabase, model, run, job, project, plans, tasks, currentFiles, skillsContext)
+      : await generateInitialFiles(supabase, model, run, job, project, plans, skillsContext);
     files = await synthesizeFinalFiles(supabase, model, run, job, project, plans, files, skillsContext);
     const firstGateReport = deterministicQualityReport(project, job, files);
     if (!firstGateReport.passed) {
