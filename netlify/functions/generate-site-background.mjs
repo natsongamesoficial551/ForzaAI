@@ -562,6 +562,7 @@ async function synthesizeFinalFiles(supabase, model, run, job, project, plans, f
 
 async function repairFilesForQuality(supabase, model, run, job, project, plans, files, gateReport) {
   await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: reforçando qualidade antes da validação…");
+  const contract = deliveryContract(project, job, plans);
   const content = await fetchAiText(model, {
     stream: false,
     temperature: 0.1,
@@ -572,14 +573,33 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
       },
       {
         role: "user",
-        content: `Projeto: ${project.name}\nPedido original: ${job.message}\nPlanos:\n${JSON.stringify(plans)}\n\nProblemas detectados:\n${(gateReport.issues || []).join("\n")}\n\nArquivos atuais:\n${filesContext(files)}`,
+        content: `Contrato obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nPlanos:\n${JSON.stringify(plans)}\n\nProblemas detectados:\n${(gateReport.issues || []).join("\n")}\n\nArquivos atuais:\n${filesContext(files)}`,
       },
     ],
   }, { supabase, jobId: job.id });
   await saveArtifact(supabase, run.id, "model_raw_output", { repair: true, content: content.slice(0, 120_000), issues: gateReport.issues || [] });
   const parsed = normalizeGeneratedFiles(content, project.name);
   if (!parsed) return files;
-  return parsed;
+  const parsedReport = deterministicQualityReport(project, job, parsed);
+  if (parsedReport.passed) return parsed;
+
+  await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: expandindo conteúdo visível…");
+  const expansion = await fetchAiText(model, {
+    stream: false,
+    temperature: 0.1,
+    messages: [
+      {
+        role: "system",
+        content: "Você é o expansor final de conteúdo do ForzaAI. O HTML atual é válido, mas insuficiente. Não resuma. Reescreva os três arquivos completos com uma página cheia e navegável. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nRegras: no mínimo 7 seções reais, 6 headings h1-h3, 1400+ caracteres de texto visível, cards/listas, CTA, FAQ e footer. Nada de conteúdo vazio.",
+      },
+      {
+        role: "user",
+        content: `Contrato obrigatório:\n${JSON.stringify(contract)}\n\nProblemas restantes:\n${(parsedReport.issues || []).join("\n")}\n\nArquivos para expandir:\n${filesContext(parsed)}`,
+      },
+    ],
+  }, { supabase, jobId: job.id });
+  await saveArtifact(supabase, run.id, "model_raw_output", { expansion: true, content: expansion.slice(0, 120_000), issues: parsedReport.issues || [] });
+  return normalizeGeneratedFiles(expansion, project.name) ?? parsed;
 }
 
 function visibleTextFromHtml(html) {

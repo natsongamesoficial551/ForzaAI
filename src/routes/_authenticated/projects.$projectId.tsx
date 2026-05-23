@@ -462,7 +462,8 @@ function Workspace() {
 
   const hasFiles = (files?.length ?? 0) > 0;
   const selectedModelOption = modelOptions.find((model) => model.id === selectedModel) ?? modelOptions[0];
-  const isPlanning = !hasFiles && (wizardQuestions.length > 0 || !!initialPrompt || (!messages || messages.length === 0));
+  const isGenerating = generationJobMutation.isPending || !!activeJobId;
+  const isPlanning = !isGenerating && !hasFiles && (wizardQuestions.length > 0 || !!initialPrompt || (!messages || messages.length === 0));
   const mode = isPlanning ? "plan" : "build";
 
   const handleSend = () => {
