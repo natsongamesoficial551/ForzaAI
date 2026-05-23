@@ -518,14 +518,14 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
       await updateTask(supabase, task.id, { status: "failed", error: message });
       await saveArtifact(supabase, run.id, "model_raw_output", { taskId: task.id, title: task.title, failed: true, error: message });
       if (workingFiles.length) break;
-      return deterministicPremiumFiles(project, job, plans, [message]);
+      throw new Error(`A IA não conseguiu gerar arquivos iniciais válidos: ${message}`);
     }
     const parsed = normalizeGeneratedFiles(content, project.name);
     await saveArtifact(supabase, run.id, "model_raw_output", { taskId: task.id, title: task.title, content: content.slice(0, 120_000) });
     if (!parsed) {
       await updateTask(supabase, task.id, { status: "failed", error: "A IA não retornou arquivos suficientes." });
       if (workingFiles.length) break;
-      return deterministicPremiumFiles(project, job, plans, ["A IA não retornou arquivos suficientes."]);
+      throw new Error("A IA não retornou os três arquivos completos no formato exigido.");
     }
     workingFiles = parsed;
     await updateTask(supabase, task.id, {
@@ -778,9 +778,8 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
       files = await repairFilesForQuality(supabase, model, run, job, project, plans, files, firstGateReport);
       const repairedGateReport = deterministicQualityReport(project, job, files);
       if (!repairedGateReport.passed) {
-        await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: aplicando fallback apenas por segurança…");
-        await saveArtifact(supabase, run.id, "quality_gate_report", { fallback: "deterministic_premium", beforeRepair: firstGateReport, afterRepair: repairedGateReport });
-        files = deterministicPremiumFiles(project, job, plans, repairedGateReport.blocking_issues || repairedGateReport.issues || []);
+        await saveArtifact(supabase, run.id, "quality_gate_report", { blocked: true, beforeRepair: firstGateReport, afterRepair: repairedGateReport });
+        throw new Error(`A IA gerou arquivos inseguros ou incompletos mesmo após reparo: ${(repairedGateReport.blocking_issues || repairedGateReport.issues || []).slice(0, 4).join("; ")}`);
       }
     } else {
       await saveArtifact(supabase, run.id, "quality_gate_report", { preservedAiOutput: true, report: firstGateReport });
