@@ -109,6 +109,33 @@ function escapeHtml(value) {
   return String(value || "").replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
 }
 
+function deliveryContract(project, job, plans) {
+  const request = job.message || project.description || project.name || "site premium";
+  const productPlan = plans?.productPlan ?? {};
+  const technicalPlan = plans?.technicalPlan ?? {};
+  return {
+    original_request: request,
+    project_name: project.name,
+    site_type: project.site_type,
+    must_preserve: [
+      "O pedido original é a fonte da verdade e deve aparecer em todas as decisões de produto, telas, copy e validação.",
+      "A entrega final sempre precisa conter index.html, styles.css e script.js completos e coerentes entre si.",
+      "Cada task deve expandir o produto inteiro, não substituir o projeto por um recorte menor da task atual.",
+      "O resultado deve parecer um produto/site final premium, não scaffold, placeholder, wireframe ou home genérica.",
+    ],
+    required_sections: productPlan.pages ?? technicalPlan.screens ?? ["Landing", "Onboarding", "Dashboard", "Pricing", "Settings", "Contato"],
+    required_features: productPlan.features ?? ["Navegação", "CTAs", "Dados mockados", "Estados vazios", "Responsividade", "Interações seguras"],
+    acceptance_criteria: [
+      ...(productPlan.quality_criteria ?? []),
+      "Visual premium com hierarquia, espaçamento, responsividade e microinterações.",
+      "Copy específica do briefing em português do Brasil.",
+      "Sem TODO, lorem ipsum, placeholders, segredos, SQL sensível, service role, API keys ou eval.",
+      "CSS com media queries e componentes suficientes para desktop/mobile.",
+      "JS seguro para navegação/interações sem innerHTML com dados variáveis.",
+    ],
+  };
+}
+
 function deterministicPremiumFiles(project, job, plans, reason = []) {
   const title = escapeHtml(project.name || "Projeto ForzaAI");
   const request = escapeHtml(job.message || project.description || project.name || "site premium");
@@ -439,14 +466,15 @@ function defaultTasks(productPlan, technicalPlan) {
   ];
 }
 
-async function createImplementationTasks(supabase, model, run, job, plans) {
+async function createImplementationTasks(supabase, model, run, job, project, plans) {
   await setPhase(supabase, job.id, run.id, "task_generation", "Forza Engine: quebrando em tasks…");
+  const contract = deliveryContract(project, job, plans);
   const taskPlan = await fetchJson(model, [
     {
       role: "system",
-      content: "Quebre a implementação em 4 a 6 tasks pequenas para gerar um SaaS/site completo no editor atual. Responda somente JSON: {\"tasks\":[{\"title\":\"...\",\"description\":\"...\"}]}",
+      content: "Quebre a implementação em 4 a 6 tasks progressivas para gerar um SaaS/site completo no editor atual. Cada task deve carregar o contexto inteiro do pedido original e produzir/expandir os três arquivos completos, sem perder telas já criadas. Responda somente JSON: {\"tasks\":[{\"title\":\"...\",\"description\":\"...\"}]}",
     },
-    { role: "user", content: JSON.stringify(plans) },
+    { role: "user", content: JSON.stringify({ contract, plans }) },
   ], { tasks: defaultTasks(plans.productPlan, plans.technicalPlan) }, { supabase, jobId: job.id });
   const rawTasks = Array.isArray(taskPlan.tasks) && taskPlan.tasks.length >= 3 ? taskPlan.tasks : defaultTasks(plans.productPlan, plans.technicalPlan);
   const tasks = rawTasks.slice(0, 6).map((task, index) => ({
@@ -463,6 +491,7 @@ async function createImplementationTasks(supabase, model, run, job, plans) {
 
 async function implementFiles(supabase, model, run, job, project, plans, tasks, currentFiles, skillsContext) {
   await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: implementando arquivos por tasks…");
+  const contract = deliveryContract(project, job, plans);
   let workingFiles = currentFiles?.length ? currentFiles.map((file) => ({ path: file.path, language: file.path === "styles.css" ? "css" : file.path === "script.js" ? "javascript" : "html", content: file.content })) : [];
 
   for (const task of tasks) {
@@ -476,11 +505,11 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
         messages: [
           {
             role: "system",
-            content: "Você é o implementador principal do ForzaAI. Aplique a task no projeto e retorne SEMPRE os três arquivos completos, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nMantenha tudo coeso, responsivo, acessível e com visual premium. Para SaaS, simule produto completo: landing, auth visual, dashboard, onboarding, planos, settings, dados mockados e estados reais. Segurança obrigatória: não use eval, innerHTML com dados variáveis, scripts remotos desconhecidos, API keys, service role, SQL ou endpoints sensíveis no código gerado.",
+            content: "Você é o implementador principal do ForzaAI. O pedido original e o contrato de entrega são a fonte da verdade. Aplique a task atual SEM perder escopo, telas, copy ou componentes já criados. Retorne SEMPRE os três arquivos completos, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nMantenha tudo coeso, responsivo, acessível e com visual premium. Para SaaS, simule produto completo: landing, auth visual, dashboard, onboarding, planos, settings, dados mockados e estados reais. Para portfólio/site comercial, entregue hero, prova social, serviços/cases, processo, pricing/oferta, FAQ e contato. Segurança obrigatória: não use eval, innerHTML com dados variáveis, scripts remotos desconhecidos, API keys, service role, SQL ou endpoints sensíveis no código gerado.",
           },
           {
             role: "user",
-            content: `Projeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${skillsContext || "—"}\nPlanos:\n${JSON.stringify(plans)}\n\nTask atual: ${task.title}\n${task.description}\n\nArquivos atuais de trabalho:\n${filesContext(workingFiles)}`,
+            content: `Contrato de entrega obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${skillsContext || "—"}\nPlanos:\n${JSON.stringify(plans)}\n\nTask atual: ${task.title}\n${task.description}\n\nArquivos atuais de trabalho:\n${filesContext(workingFiles)}\n\nAntes de responder, confira se os três arquivos finais ainda cumprem o pedido original inteiro e todos os critérios do contrato.`,
           },
         ],
       }, { supabase, jobId: job.id });
@@ -507,6 +536,28 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
   }
 
   return workingFiles;
+}
+
+async function synthesizeFinalFiles(supabase, model, run, job, project, plans, files, skillsContext) {
+  await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: consolidando entrega final…");
+  const contract = deliveryContract(project, job, plans);
+  const content = await fetchAiText(model, {
+    stream: false,
+    temperature: 0.1,
+    messages: [
+      {
+        role: "system",
+        content: "Você é o finalizador principal do ForzaAI. Releia o pedido original, contrato, planos e arquivos atuais. Produza uma versão final coesa e premium que preserve o escopo inteiro e corrija lacunas antes da validação. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: produto/site completo, bonito, específico do briefing, responsivo, acessível, com copy BR, sem placeholders e sem segredos.",
+      },
+      {
+        role: "user",
+        content: `Contrato de entrega obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${skillsContext || "—"}\nPlanos:\n${JSON.stringify(plans)}\n\nArquivos atuais:\n${filesContext(files)}`,
+      },
+    ],
+  }, { supabase, jobId: job.id });
+  await saveArtifact(supabase, run.id, "model_raw_output", { finalSynthesis: true, content: content.slice(0, 120_000) });
+  const parsed = normalizeGeneratedFiles(content, project.name);
+  return parsed ?? files;
 }
 
 async function repairFilesForQuality(supabase, model, run, job, project, plans, files, gateReport) {
@@ -552,6 +603,18 @@ function deterministicQualityReport(project, job, files) {
   if (/eval\s*\(|service[_-]?role|api[_-]?key\s*=|sk-[a-z0-9]/i.test(combined)) issues.push("Arquivos contêm padrão inseguro ou possível segredo.");
 
   const request = String(job.message || project.name || "").toLowerCase();
+  const requestTerms = request
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter((term) => term.length >= 5 && !["quero", "criar", "fazer", "site", "para", "com", "uma", "como", "pagina", "landing"].includes(term))
+    .slice(0, 10);
+  const normalizedCombined = combined.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const matchedTerms = requestTerms.filter((term) => normalizedCombined.includes(term)).length;
+  if (requestTerms.length >= 3 && matchedTerms < Math.min(3, requestTerms.length)) {
+    issues.push("Entrega não reflete termos específicos suficientes do pedido original.");
+  }
+
   if (/portfolio|portfólio/.test(request)) {
     const portfolioSignals = ["projeto", "case", "portfolio", "portfólio", "designer", "contato", "serviço"];
     const found = portfolioSignals.filter((signal) => combined.toLowerCase().includes(signal)).length;
@@ -689,8 +752,9 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
 
   try {
     const plans = await buildPlans(supabase, model, run, project, job, currentFiles, skillsContext);
-    const tasks = await createImplementationTasks(supabase, model, run, job, plans);
+    const tasks = await createImplementationTasks(supabase, model, run, job, project, plans);
     let files = await implementFiles(supabase, model, run, job, project, plans, tasks, currentFiles, skillsContext);
+    files = await synthesizeFinalFiles(supabase, model, run, job, project, plans, files, skillsContext);
     const firstGateReport = deterministicQualityReport(project, job, files);
     if (!firstGateReport.passed) {
       files = await repairFilesForQuality(supabase, model, run, job, project, plans, files, firstGateReport);
