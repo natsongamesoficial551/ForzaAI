@@ -568,7 +568,7 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
     messages: [
       {
         role: "system",
-        content: "Você é o reparador final do ForzaAI. Recrie e expanda os três arquivos completos para passar quality gates determinísticos. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: HTML premium e completo, CSS robusto com responsividade usando @media, JS seguro sem eval/segredos, zero placeholders/TODO/lorem ipsum, conteúdo específico do pedido. Para portfólio, inclua hero, bio, serviços, cases/projetos, processo, depoimentos/prova social e contato. Para SaaS/app, inclua landing, onboarding, dashboard, pricing/billing, settings e dados mockados seguros.",
+        content: "Você é o reparador final do ForzaAI. Recrie e expanda os três arquivos completos para passar quality gates determinísticos. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: HTML premium e completo, CSS robusto com responsividade usando @media, JS seguro sem eval/segredos, zero placeholders/TODO/lorem ipsum, conteúdo específico do pedido. Nunca deixe hero ou body vazios. Inclua no mínimo 6 seções visíveis, 5 títulos, copy real e cards/itens suficientes. Para e-commerce, inclua hero, categorias, vitrine de produtos, benefícios, prova social, FAQ e footer. Para portfólio, inclua hero, bio, serviços, cases/projetos, processo, depoimentos/prova social e contato. Para SaaS/app, inclua landing, onboarding, dashboard, pricing/billing, settings e dados mockados seguros.",
       },
       {
         role: "user",
@@ -582,18 +582,33 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
   return parsed;
 }
 
+function visibleTextFromHtml(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function deterministicQualityReport(project, job, files) {
   const byPath = Object.fromEntries(files.map((file) => [file.path, file.content || ""]));
   const html = byPath["index.html"] || "";
   const css = byPath["styles.css"] || "";
   const js = byPath["script.js"] || "";
   const combined = `${html}\n${css}\n${js}`;
+  const visibleText = visibleTextFromHtml(html);
+  const sectionCount = (html.match(/<section\b/gi) || []).length;
+  const headingCount = (html.match(/<h[1-3]\b/gi) || []).length;
   const issues = [];
 
   for (const path of ["index.html", "styles.css", "script.js"]) {
     if (!byPath[path]?.trim()) issues.push(`Arquivo obrigatório ausente ou vazio: ${path}`);
   }
   if (html.length < 6000) issues.push("HTML curto demais para uma entrega premium completa.");
+  if (visibleText.length < 1200) issues.push("Conteúdo visível insuficiente para uma página completa.");
+  if (sectionCount < 4) issues.push("Poucas seções visíveis para a página solicitada.");
+  if (headingCount < 4) issues.push("Poucos títulos/seções estruturadas no HTML.");
   if (css.length < 2500) issues.push("CSS curto demais para layout responsivo e visual premium.");
   if (!/@media\b/i.test(css)) issues.push("CSS não contém responsividade mínima com media queries.");
   if (/ForzaAI\s*<\/h1>|Home\s*<\/button>|Templates\s*<\/button>|Analytics\s*<\/button>|Configurações\s*<\/button>/i.test(html)) {
@@ -627,7 +642,7 @@ function deterministicQualityReport(project, job, files) {
     if (found < 4) issues.push("SaaS/app não possui telas e fluxos suficientes além de uma home.");
   }
 
-  const blockingIssues = issues.filter((issue) => /Arquivo obrigatório|padrão inseguro|possível segredo/i.test(issue));
+  const blockingIssues = issues.filter((issue) => /Arquivo obrigatório|padrão inseguro|possível segredo|Conteúdo visível insuficiente|Poucas seções|Poucos títulos/i.test(issue));
   return {
     passed: blockingIssues.length === 0,
     score: Math.max(55, 100 - issues.length * 10),
