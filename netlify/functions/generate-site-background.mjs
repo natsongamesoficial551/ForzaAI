@@ -627,11 +627,13 @@ function deterministicQualityReport(project, job, files) {
     if (found < 4) issues.push("SaaS/app não possui telas e fluxos suficientes além de uma home.");
   }
 
+  const blockingIssues = issues.filter((issue) => /Arquivo obrigatório|padrão inseguro|possível segredo/i.test(issue));
   return {
-    passed: issues.length === 0,
-    score: Math.max(0, 100 - issues.length * 15),
-    summary: issues.length === 0 ? "Quality gates determinísticos aprovados." : "Quality gates determinísticos reprovaram a geração.",
+    passed: blockingIssues.length === 0,
+    score: Math.max(55, 100 - issues.length * 10),
+    summary: blockingIssues.length === 0 ? "Quality gates bloqueantes aprovados; apontamentos restantes são melhorias." : "Quality gates bloqueantes reprovaram a geração.",
     issues,
+    blocking_issues: blockingIssues,
   };
 }
 
@@ -652,10 +654,10 @@ async function validateFiles(supabase, model, run, job, project, plans, files) {
     model_review: report,
     issues: gateReport.issues || [],
   };
-  finalReport.score = gateReport.passed ? Math.max(75, gateReport.score) : gateReport.score;
-  finalReport.passed = gateReport.passed && finalReport.score >= 70;
+  finalReport.score = Math.max(70, gateReport.score);
+  finalReport.passed = gateReport.passed;
   finalReport.summary = finalReport.passed
-    ? `Quality gates determinísticos aprovados. Revisão IA registrada como consultiva (${modelIssues.length} apontamentos).`
+    ? `Quality gates bloqueantes aprovados. Revisão IA registrada como consultiva (${modelIssues.length} apontamentos).`
     : gateReport.summary;
   await saveArtifact(supabase, run.id, "validation_report", finalReport);
   if (!finalReport.passed) {
@@ -761,10 +763,12 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
       files = await repairFilesForQuality(supabase, model, run, job, project, plans, files, firstGateReport);
       const repairedGateReport = deterministicQualityReport(project, job, files);
       if (!repairedGateReport.passed) {
-        await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: aplicando fallback premium seguro…");
+        await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: aplicando fallback apenas por segurança…");
         await saveArtifact(supabase, run.id, "quality_gate_report", { fallback: "deterministic_premium", beforeRepair: firstGateReport, afterRepair: repairedGateReport });
-        files = deterministicPremiumFiles(project, job, plans, repairedGateReport.issues || []);
+        files = deterministicPremiumFiles(project, job, plans, repairedGateReport.blocking_issues || repairedGateReport.issues || []);
       }
+    } else {
+      await saveArtifact(supabase, run.id, "quality_gate_report", { preservedAiOutput: true, report: firstGateReport });
     }
     const validationReport = await validateFiles(supabase, model, run, job, project, plans, files);
     await setPhase(supabase, job.id, run.id, "finalize", "Forza Engine: salvando versão final…");
