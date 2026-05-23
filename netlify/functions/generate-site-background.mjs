@@ -132,6 +132,8 @@ function deliveryContract(project, job, plans) {
       "Sem TODO, lorem ipsum, placeholders, segredos, SQL sensível, service role, API keys ou eval.",
       "CSS com media queries e componentes suficientes para desktop/mobile.",
       "JS seguro para navegação/interações sem innerHTML com dados variáveis.",
+      "Todo botão, formulário, tab, filtro, carrinho, modal, FAQ, toggle claro/escuro ou menu visível precisa ter comportamento funcional seguro no script.js.",
+      "Formulários devem validar campos e exibir feedback de sucesso/erro sem enviar dados reais.",
     ],
   };
 }
@@ -505,7 +507,7 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
         messages: [
           {
             role: "system",
-            content: "Você é o implementador principal do ForzaAI. O pedido original e o contrato de entrega são a fonte da verdade. Aplique a task atual SEM perder escopo, telas, copy ou componentes já criados. Retorne SEMPRE os três arquivos completos, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nMantenha tudo coeso, responsivo, acessível e com visual premium. Para SaaS, simule produto completo: landing, auth visual, dashboard, onboarding, planos, settings, dados mockados e estados reais. Para portfólio/site comercial, entregue hero, prova social, serviços/cases, processo, pricing/oferta, FAQ e contato. Segurança obrigatória: não use eval, innerHTML com dados variáveis, scripts remotos desconhecidos, API keys, service role, SQL ou endpoints sensíveis no código gerado.",
+            content: "Você é o implementador principal do ForzaAI. O pedido original e o contrato de entrega são a fonte da verdade. Aplique a task atual SEM perder escopo, telas, copy ou componentes já criados. Retorne SEMPRE os três arquivos completos, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nMantenha tudo coeso, responsivo, acessível e com visual premium. Para SaaS, simule produto completo: landing, auth visual, dashboard, onboarding, planos, settings, dados mockados e estados reais. Para portfólio/site comercial, entregue hero, prova social, serviços/cases, processo, pricing/oferta, FAQ e contato. Segurança obrigatória: não use eval, innerHTML com dados variáveis, scripts remotos desconhecidos, API keys, service role, SQL ou endpoints sensíveis no código gerado. Interações obrigatórias: botões visíveis devem ter ação segura, links âncora devem rolar suavemente, formulários devem validar e mostrar feedback, toggles claro/escuro devem alternar tema, menus/tabs/filtros/carrinho/modais/FAQ visíveis devem funcionar no script.js.",
           },
           {
             role: "user",
@@ -547,7 +549,7 @@ async function synthesizeFinalFiles(supabase, model, run, job, project, plans, f
     messages: [
       {
         role: "system",
-        content: "Você é o finalizador principal do ForzaAI. Releia o pedido original, contrato, planos e arquivos atuais. Produza uma versão final coesa e premium que preserve o escopo inteiro e corrija lacunas antes da validação. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: produto/site completo, bonito, específico do briefing, responsivo, acessível, com copy BR, sem placeholders e sem segredos. Evite seções com min-height exagerado, espaços vazios gigantes, header sobrepondo conteúdo, texto colado ou títulos cortados; use scroll-margin-top nas âncoras e line-height legível.",
+        content: "Você é o finalizador principal do ForzaAI. Releia o pedido original, contrato, planos e arquivos atuais. Produza uma versão final coesa e premium que preserve o escopo inteiro e corrija lacunas antes da validação. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: produto/site completo, bonito, específico do briefing, responsivo, acessível, com copy BR, sem placeholders e sem segredos. Todo elemento interativo visível precisa funcionar no script.js com comportamento seguro e feedback claro. Evite seções com min-height exagerado, espaços vazios gigantes, header sobrepondo conteúdo, texto colado ou títulos cortados; use scroll-margin-top nas âncoras e line-height legível.",
       },
       {
         role: "user",
@@ -590,7 +592,7 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
     messages: [
       {
         role: "system",
-        content: "Você é o expansor final de conteúdo do ForzaAI. O HTML atual é válido, mas insuficiente. Não resuma. Reescreva os três arquivos completos com uma página cheia e navegável. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nRegras: no mínimo 7 seções reais, 6 headings h1-h3, 1400+ caracteres de texto visível, cards/listas, CTA, FAQ e footer. Nada de conteúdo vazio.",
+        content: "Você é o expansor final de conteúdo do ForzaAI. O HTML atual é válido, mas insuficiente. Não resuma. Reescreva os três arquivos completos com uma página cheia e navegável. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nRegras: no mínimo 7 seções reais, 6 headings h1-h3, 1400+ caracteres de texto visível, cards/listas, CTA, FAQ e footer. Nada de conteúdo vazio. Formulários, tema claro/escuro, filtros, carrinho, tabs, modais, menu mobile e FAQ visíveis precisam funcionar no script.js.",
       },
       {
         role: "user",
@@ -637,6 +639,18 @@ function deterministicQualityReport(project, job, files) {
   const contentWithoutAttributes = combined.replace(/\splaceholder=("[^"]*"|'[^']*')/gi, "");
   if (/TODO|lorem ipsum|coming soon|em breve/i.test(contentWithoutAttributes)) issues.push("Arquivos contêm placeholders ou conteúdo incompleto.");
   if (/eval\s*\(|service[_-]?role|api[_-]?key\s*=|sk-[a-z0-9]{20,}/i.test(combined)) issues.push("Arquivos contêm padrão inseguro ou possível segredo.");
+  if (/<form\b/i.test(html) && !/addEventListener\(['"]submit|onsubmit|checkValidity|preventDefault/i.test(js)) {
+    issues.push("Formulário visível sem validação ou feedback no JavaScript.");
+  }
+  if (/dark|light|tema|theme|claro|escuro/i.test(html) && !/classList\.toggle|dataset\.theme|localStorage|prefers-color-scheme/i.test(js)) {
+    issues.push("Toggle/tema visual sem implementação funcional no JavaScript.");
+  }
+  if (/<details\b|faq/i.test(html) && !/<details\b/i.test(html) && !/addEventListener\(['"]click|aria-expanded|classList\.toggle/i.test(js)) {
+    issues.push("FAQ/interação expansível sem comportamento funcional.");
+  }
+  if (/cart|carrinho|add-to-cart|adicionar/i.test(html) && !/cart|carrinho|addEventListener\(['"]click|quantity|total/i.test(js)) {
+    issues.push("Carrinho ou ações de compra visíveis sem lógica básica no JavaScript.");
+  }
 
   const request = String(job.message || project.name || "").toLowerCase();
   const requestTerms = request
@@ -662,7 +676,7 @@ function deterministicQualityReport(project, job, files) {
     if (found < 4) issues.push("SaaS/app não possui telas e fluxos suficientes além de uma home.");
   }
 
-  const blockingIssues = issues.filter((issue) => /Arquivo obrigatório|padrão inseguro|possível segredo|Conteúdo visível insuficiente|Poucas seções|Poucos títulos/i.test(issue));
+  const blockingIssues = issues.filter((issue) => /Arquivo obrigatório|padrão inseguro|possível segredo|Conteúdo visível insuficiente|Poucas seções|Poucos títulos|Formulário visível|Toggle\/tema visual|Carrinho ou ações de compra/i.test(issue));
   return {
     passed: blockingIssues.length === 0,
     score: Math.max(55, 100 - issues.length * 10),
