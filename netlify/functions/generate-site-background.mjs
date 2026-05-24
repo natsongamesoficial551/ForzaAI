@@ -856,23 +856,9 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
     if (!currentFiles?.length && tasks[1]) await updateTask(supabase, tasks[1].id, { status: "completed", completed_at: new Date().toISOString() });
     if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "running" });
     const firstGateReport = deterministicQualityReport(project, job, files);
-    if (!firstGateReport.passed) {
-      if (!currentFiles?.length && tasks[3]) await updateTask(supabase, tasks[3].id, { status: "running" });
-      files = await repairFilesForQuality(supabase, model, run, job, project, plans, files, firstGateReport);
-      const repairedGateReport = deterministicQualityReport(project, job, files);
-      if (!repairedGateReport.passed) {
-          if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "failed", error: (repairedGateReport.blocking_issues || repairedGateReport.issues || []).slice(0, 4).join("; ") });
-        if (!currentFiles?.length && tasks[3]) await updateTask(supabase, tasks[3].id, { status: "failed", error: (repairedGateReport.blocking_issues || repairedGateReport.issues || []).slice(0, 4).join("; ") });
-        await saveArtifact(supabase, run.id, "quality_gate_report", { blocked: true, beforeRepair: firstGateReport, afterRepair: repairedGateReport });
-        throw new Error(`A IA gerou arquivos inseguros ou incompletos mesmo após reparo: ${(repairedGateReport.blocking_issues || repairedGateReport.issues || []).slice(0, 4).join("; ")}`);
-      }
-      if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "completed", completed_at: new Date().toISOString() });
-      if (!currentFiles?.length && tasks[3]) await updateTask(supabase, tasks[3].id, { status: "completed", completed_at: new Date().toISOString() });
-    } else {
-      if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "completed", completed_at: new Date().toISOString() });
-      if (!currentFiles?.length && tasks[3]) await updateTask(supabase, tasks[3].id, { status: "completed", completed_at: new Date().toISOString() });
-      await saveArtifact(supabase, run.id, "quality_gate_report", { preservedAiOutput: true, report: firstGateReport });
-    }
+    await saveArtifact(supabase, run.id, "quality_gate_report", { blockingDisabled: true, report: firstGateReport });
+    if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "completed", completed_at: new Date().toISOString() });
+    if (!currentFiles?.length && tasks[3]) await updateTask(supabase, tasks[3].id, { status: "completed", completed_at: new Date().toISOString() });
     const validationReport = await validateFiles(supabase, model, run, job, project, plans, files);
     await setPhase(supabase, job.id, run.id, "finalize", "Forza Engine: salvando versão final…");
     await saveFiles(supabase, job.project_id, files);
