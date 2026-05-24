@@ -47,6 +47,8 @@ const JobInputSchema = InputSchema.pick({
   projectId: true,
   message: true,
   modelId: true,
+}).extend({
+  persistUserMessage: z.boolean().optional(),
 });
 
 const JobStatusInputSchema = z.object({
@@ -591,6 +593,31 @@ export const startGenerationJob = createServerFn({ method: "POST" })
       _user_id: userId,
     });
     if (!canEdit) throw new Error("Projeto não encontrado");
+
+    if (data.persistUserMessage) {
+      let { data: convo } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("project_id", data.projectId)
+        .order("created_at")
+        .limit(1)
+        .maybeSingle();
+      if (!convo) {
+        const { data: created, error } = await supabase
+          .from("conversations")
+          .insert({ project_id: data.projectId, title: "Conversa principal" })
+          .select("id")
+          .single();
+        if (error) throw error;
+        convo = created;
+      }
+      const { error: messageError } = await supabase.from("messages").insert({
+        conversation_id: convo.id,
+        role: "user",
+        content: data.message,
+      });
+      if (messageError) throw messageError;
+    }
 
     const { data: job, error } = await supabase
       .from("generation_jobs")

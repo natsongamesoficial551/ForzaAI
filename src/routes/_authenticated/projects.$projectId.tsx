@@ -245,14 +245,14 @@ function Workspace() {
     onError: (e: Error) => toast.error(readableError(e)),
   });
 
-  const startBuildJob = (message: string) => {
-    generationJobMutation.mutate({ message });
+  const startBuildJob = (message: string, persistUserMessage = false) => {
+    generationJobMutation.mutate({ message, persistUserMessage });
   };
 
   const generationJobMutation = useMutation({
-    mutationFn: async ({ message }: { message: string }) => {
+    mutationFn: async ({ message, persistUserMessage }: { message: string; persistUserMessage?: boolean }) => {
       setStreaming({ status: "Enviando geração para background…", chars: 0 });
-      return startJobFn({ data: { projectId, message, modelId: selectedModel } });
+      return startJobFn({ data: { projectId, message, modelId: selectedModel, persistUserMessage } });
     },
     onSuccess: (job) => {
       completedJobRef.current = null;
@@ -479,7 +479,7 @@ function Workspace() {
       return;
     }
     if (messageAttachments.length === 0) {
-      startBuildJob(`Pedido de ajuste do usuário:\n${text}\n\nModo Build: atualize os arquivos existentes mantendo o site funcional e aplicando exatamente o ajuste pedido.`);
+      startBuildJob(`Pedido de ajuste do usuário:\n${text}\n\nModo Build: atualize os arquivos existentes mantendo o site funcional e aplicando exatamente o ajuste pedido. Se o pedido mencionar claro/escuro, tema, toggle ou modo noturno, implemente CSS dos dois temas e JavaScript real para alternar e persistir a preferência.`, true);
       return;
     }
     sendMutation.mutate({ message: text || "Analise os anexos enviados e sugira/corrija o site.", attachments: messageAttachments });
