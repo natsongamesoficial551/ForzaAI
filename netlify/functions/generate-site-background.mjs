@@ -722,6 +722,10 @@ function analyzeGeneratedSite(project, job, files) {
   const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? html;
   const main = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1] ?? "";
   const firstViewport = body.slice(0, 4500);
+  const firstViewportText = visibleTextFromHtml(firstViewport);
+  const firstViewportBlocks = (firstViewport.match(/<section\b|<article\b|<aside\b|<div\b|<p\b|<h[1-3]\b|<a\b|<button\b/gi) || []).length;
+  const cssHidesContent = /body\s*\{[^}]*color\s*:\s*(?:#fff|white|rgb\(255\s*,\s*255\s*,\s*255\))[^}]*background\s*:\s*(?:#fff|white|rgb\(255\s*,\s*255\s*,\s*255\))|opacity\s*:\s*0|visibility\s*:\s*hidden|display\s*:\s*none/i.test(css);
+  const likelyBlankViewport = firstViewportText.length < 180 || firstViewportBlocks < 8 || /min-height\s*:\s*(?:70|80|90|100)vh[^}]{0,260}\{?[^}]*\}/i.test(css) && firstViewportText.length < 320;
   const productMatches = html.match(/(?:class|data-[\w-]+|id)=["'][^"']*(?:product|produto|item-card|card-produto)[^"']*["']|R\$\s*\d|comprar|adicionar ao carrinho/gi) || [];
   const caseMatches = html.match(/(?:case|projeto|portfolio|portfólio)[\s\S]{0,140}?(?:<article|<li|<div|<h3)|(?:class|id)=["'][^"']*(?:case|project|projeto|portfolio)[^"']*["']/gi) || [];
   const appBlockMatches = html.match(/dashboard|onboarding|login|settings|configuraç|billing|pricing|métrica|metric|kanban|pipeline/gi) || [];
@@ -730,6 +734,8 @@ function analyzeGeneratedSite(project, job, files) {
     cssChars: css.length,
     jsChars: js.length,
     visibleTextChars: visibleText.length,
+    firstViewportTextChars: firstViewportText.length,
+    firstViewportBlocks,
     mainTextChars: visibleTextFromHtml(main).length,
     sections: (html.match(/<section\b/gi) || []).length,
     headings: (html.match(/<h[1-3]\b/gi) || []).length,
@@ -758,6 +764,8 @@ function analyzeGeneratedSite(project, job, files) {
   if (metrics.cssRules < Math.max(18, minimums.cssRules - 10)) addBlocking("CSS sem regras suficientes para layout básico premium.", "Expanda o CSS com layout, grids, cards, estados, responsividade e primeira dobra preenchida.");
   try { new Function(js); } catch (error) { addBlocking(`JavaScript com erro de sintaxe: ${error.message}`, "Corrija a sintaxe do script.js mantendo todas as interações funcionando."); }
   if (!metrics.hasHeroH1 || !metrics.hasHeroCta || !metrics.hasHeroSubtitle) addBlocking("Hero acima da dobra incompleto.", "No início do body/main, inclua hero com h1, subtítulo, CTA e apoio visual/card sem área branca dominante.");
+  if (likelyBlankViewport) addBlocking("Primeira dobra provavelmente branca ou vazia.", "Preencha a primeira viewport com hero denso: h1, subtítulo, dois CTAs, prova social/métrica e card/visual ao lado, sem bloco branco gigante.");
+  if (cssHidesContent) addBlocking("CSS pode esconder ou branquear o conteúdo principal.", "Garanta contraste real entre texto e fundo, sem opacity 0, visibility hidden ou display none em conteúdo principal.");
   if (/ForzaAI\s*<\/h1>|Home\s*<\/button>|Templates\s*<\/button>|Analytics\s*<\/button>|Configurações\s*<\/button>/i.test(html)) addBlocking("Preview parece scaffold genérico do editor, não o site solicitado.", "Substitua qualquer scaffold por conteúdo específico do projeto do usuário.");
   if (/TODO|lorem ipsum|coming soon|em breve/i.test(combined.replace(/\splaceholder=("[^"]*"|'[^']*')/gi, ""))) addBlocking("Arquivos contêm placeholder ou conteúdo incompleto.", "Troque TODO/lorem/em breve por conteúdo final específico e seções completas.");
   if (/eval\s*\(|service[_-]?role|api[_-]?key\s*=|sk-[a-z0-9]{20,}/i.test(combined)) addBlocking("Arquivos contêm padrão inseguro ou possível segredo.", "Remova eval, chaves, service role, SQL sensível e qualquer segredo do frontend.");
@@ -804,9 +812,9 @@ async function validateFiles(supabase, model, run, job, project, plans, files) {
     warnings: gateReport.warnings || [],
     blocking: gateReport.blocking || gateReport.blocking_issues || [],
   };
-  finalReport.score = Math.max(70, gateReport.score);
-  finalReport.passed = true;
   finalReport.blockingRemaining = (gateReport.blocking || gateReport.blocking_issues || []).length > 0;
+  finalReport.score = finalReport.blockingRemaining ? Math.min(69, gateReport.score) : Math.max(70, gateReport.score);
+  finalReport.passed = !finalReport.blockingRemaining;
   finalReport.objectiveStructuralValidation = true;
   finalReport.summary = finalReport.blockingRemaining
     ? `Site salvo com reparo de IA aplicado, mas ainda restaram ${(gateReport.blocking || gateReport.blocking_issues || []).length} lacunas estruturais registradas para transparência.`
@@ -920,7 +928,7 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
       structuralReport = analyzeGeneratedSite(project, job, files);
       await saveArtifact(supabase, run.id, "structural_analysis", { attempt: 2, report: structuralReport });
     }
-    if (structuralReport.blocking.length && structuralReport.blocking.some((issue) => /Arquivo obrigatório|Body sem conteúdo real|catálogo inicial insuficiente|poucos projetos|sem blocos suficientes|Hero acima da dobra/i.test(issue))) {
+    if (structuralReport.blocking.length && structuralReport.blocking.some((issue) => /Arquivo obrigatório|Body sem conteúdo real|catálogo inicial insuficiente|poucos projetos|sem blocos suficientes|Hero acima da dobra|Primeira dobra provavelmente branca|CSS pode esconder/i.test(issue))) {
       files = await repairFilesForQuality(supabase, model, run, job, project, plans, files, structuralReport);
       structuralReport = analyzeGeneratedSite(project, job, files);
       await saveArtifact(supabase, run.id, "structural_analysis", { attempt: 3, report: structuralReport });
@@ -992,10 +1000,13 @@ export default async (request) => {
     if (!debited) throw new Error("Créditos insuficientes do dono do projeto.");
 
     const convo = await ensureConversation(supabase, job.project_id);
+    const blockingCount = Array.isArray(validationReport.blocking) ? validationReport.blocking.length : 0;
     await supabase.from("messages").insert({
       conversation_id: convo.id,
       role: "assistant",
-      content: `Pronto — o Forza Engine gerou o projeto em ${files.length} arquivos, criou ${version.label} e validou com score ${validationReport.score ?? "—"}/100.`,
+      content: blockingCount
+        ? `Gerei ${files.length} arquivos e criei ${version.label}, mas ainda detectei ${blockingCount} lacuna(s) estruturais após o reparo da IA. Abra o preview e peça um novo ajuste se algo ainda estiver visualmente incompleto.`
+        : `Pronto — o Forza Engine gerou o projeto em ${files.length} arquivos, criou ${version.label} e passou na validação estrutural.`,
     });
 
     await updateRun(supabase, run.id, {

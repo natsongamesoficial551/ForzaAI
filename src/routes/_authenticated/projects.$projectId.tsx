@@ -660,8 +660,8 @@ document.addEventListener('click', function(event) {
     if (hasDoc) {
       let doc = html;
       if (!/<base\b/i.test(doc)) doc = doc.replace(/<head>/i, `<head><base href="about:srcdoc">`);
-      if (css && !/<style/i.test(doc))
-        doc = doc.replace(/<\/head>/i, `<style>${css}</style></head>`);
+      if (css)
+        doc = doc.replace(/<\/head>/i, `<style data-forza-preview="true">${css}</style></head>`);
       const inlineScript = js ? `<script>${js}<\/script>` : "";
       doc = doc.replace(/<script\b[^>]*src=["'][^"']*script\.js[^"']*["'][^>]*>\s*<\/script>/gi, "");
       if (inlineScript)
