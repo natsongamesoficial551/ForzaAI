@@ -122,6 +122,8 @@ function deliveryContract(project, job, plans) {
       "A entrega final sempre precisa conter index.html, styles.css e script.js completos e coerentes entre si.",
       "Cada task deve expandir o produto inteiro, não substituir o projeto por um recorte menor da task atual.",
       "O resultado deve parecer um produto/site final premium, não scaffold, placeholder, wireframe ou home genérica.",
+      "A primeira dobra da página precisa ter hero completo visível imediatamente: título, subtítulo, CTA, apoio visual/card e sem área branca/vazia dominante.",
+      "Nunca entregue apenas header, footer e espaço em branco; cada seção deve conter texto real e elementos visuais suficientes.",
     ],
     required_sections: productPlan.pages ?? technicalPlan.screens ?? ["Landing", "Onboarding", "Dashboard", "Pricing", "Settings", "Contato"],
     required_features: productPlan.features ?? ["Navegação", "CTAs", "Dados mockados", "Estados vazios", "Responsividade", "Interações seguras"],
@@ -134,6 +136,8 @@ function deliveryContract(project, job, plans) {
       "JS seguro para navegação/interações sem innerHTML com dados variáveis.",
       "Todo botão, formulário, tab, filtro, carrinho, modal, FAQ, toggle claro/escuro ou menu visível precisa ter comportamento funcional seguro no script.js.",
       "Formulários devem validar campos e exibir feedback de sucesso/erro sem enviar dados reais.",
+      "Evite telas brancas: use backgrounds, grids, cards, imagens/ilustrações CSS, métricas, listas e blocos de conteúdo na viewport inicial.",
+      "Evite min-height excessivo em seções sem conteúdo; nenhuma seção pode parecer vazia no preview."
     ],
   };
 }
@@ -517,7 +521,7 @@ async function generateInitialFiles(supabase, model, run, job, project, plans, s
     messages: [
       {
         role: "system",
-        content: "Você é o gerador principal do ForzaAI. Gere a entrega completa em UMA resposta, sem dividir em etapas. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: página completa e publicável, específica do briefing, com conteúdo real. Não deixe hero/body vazios. Inclua no mínimo 7 seções reais, 6 headings h1-h3, 1400+ caracteres de texto visível, cards/listas, CTA, FAQ e footer. CSS responsivo com @media. JS seguro e funcional para todos os elementos interativos visíveis: formulário, tema claro/escuro, menu, tabs, filtros, carrinho, modais e FAQ quando existirem. Não use eval, innerHTML com dados variáveis, API keys, SQL sensível ou scripts remotos desconhecidos.",
+        content: "Você é o gerador principal do ForzaAI. Gere a entrega completa em UMA resposta, sem dividir em etapas. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: página completa e publicável, específica do briefing, com conteúdo real. Não deixe hero/body vazios. A primeira viewport precisa mostrar hero completo com título grande, subtítulo, CTA, prova/metric card e visual premium; nunca entregue header+footer com miolo branco. Inclua no mínimo 7 seções reais, 6 headings h1-h3, 1800+ caracteres de texto visível, 8+ cards/list items, CTA, FAQ e footer. CSS responsivo com @media, background visível, espaçamento equilibrado e sem min-height que gere áreas vazias. JS seguro e funcional para todos os elementos interativos visíveis: formulário, tema claro/escuro, menu, tabs, filtros, carrinho, modais e FAQ quando existirem. Não use eval, innerHTML com dados variáveis, API keys, SQL sensível ou scripts remotos desconhecidos.",
       },
       {
         role: "user",
@@ -590,7 +594,7 @@ async function synthesizeFinalFiles(supabase, model, run, job, project, plans, f
     messages: [
       {
         role: "system",
-        content: "Você é o finalizador principal do ForzaAI. Releia o pedido original, contrato, planos e arquivos atuais. Produza uma versão final coesa e premium que preserve o escopo inteiro e corrija lacunas antes da validação. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: produto/site completo, bonito, específico do briefing, responsivo, acessível, com copy BR, sem placeholders e sem segredos. Todo elemento interativo visível precisa funcionar no script.js com comportamento seguro e feedback claro. Evite seções com min-height exagerado, espaços vazios gigantes, header sobrepondo conteúdo, texto colado ou títulos cortados; use scroll-margin-top nas âncoras e line-height legível.",
+        content: "Você é o finalizador principal do ForzaAI. Releia o pedido original, contrato, planos e arquivos atuais. Produza uma versão final coesa e premium que preserve o escopo inteiro e corrija lacunas antes da validação. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: produto/site completo, bonito, específico do briefing, responsivo, acessível, com copy BR, sem placeholders e sem segredos. Antes de responder, verifique mentalmente se o preview inicial não fica branco: acima da dobra deve existir hero com conteúdo, CTA, visual/card e densidade visual suficiente. Todo elemento interativo visível precisa funcionar no script.js com comportamento seguro e feedback claro. Evite seções com min-height exagerado, espaços vazios gigantes, header sobrepondo conteúdo, texto colado ou títulos cortados; use scroll-margin-top nas âncoras e line-height legível.",
       },
       {
         role: "user",
