@@ -491,8 +491,25 @@ async function createImplementationTasks(supabase, model, run, job, project, pla
   return created;
 }
 
-async function generateInitialFiles(supabase, model, run, job, project, plans, skillsContext) {
+async function createInitialGenerationTasks(supabase, run) {
+  const taskSpecs = [
+    ["Estrutura completa", "Gerar HTML/CSS/JS completos em uma chamada forte da IA."],
+    ["Conteúdo e seções", "Garantir conteúdo visível, seções reais, CTA, FAQ e footer."],
+    ["Interações seguras", "Implementar formulário, navegação, tema ou ações visíveis quando existirem."],
+    ["Validação e reparo", "Validar qualidade, expandir conteúdo fraco e bloquear saída insegura."],
+  ];
+  const tasks = [];
+  for (let index = 0; index < taskSpecs.length; index += 1) {
+    const [title, description] = taskSpecs[index];
+    tasks.push(await createTask(supabase, run.id, index + 1, "implementation", title, description, { generated: true }));
+  }
+  return tasks;
+}
+
+async function generateInitialFiles(supabase, model, run, job, project, plans, skillsContext, initialTasks = []) {
   await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: gerando entrega completa…");
+  const generationTask = initialTasks[0];
+  if (generationTask) await updateTask(supabase, generationTask.id, { status: "running" });
   const contract = deliveryContract(project, job, plans);
   const content = await fetchAiText(model, {
     stream: false,
@@ -511,6 +528,7 @@ async function generateInitialFiles(supabase, model, run, job, project, plans, s
   await saveArtifact(supabase, run.id, "model_raw_output", { initialFullGeneration: true, content: content.slice(0, 120_000) });
   const parsed = normalizeGeneratedFiles(content, project.name);
   if (!parsed) throw new Error("A IA não retornou os três arquivos completos no formato exigido.");
+  if (generationTask) await updateTask(supabase, generationTask.id, { status: "completed", output: { files: parsed.map((file) => ({ path: file.path, chars: file.content.length })) }, completed_at: new Date().toISOString() });
   return parsed;
 }
 
@@ -665,7 +683,8 @@ function deterministicQualityReport(project, job, files) {
   if (/<form\b/i.test(html) && !/addEventListener\(['"]submit|onsubmit|checkValidity|preventDefault/i.test(js)) {
     issues.push("Formulário visível sem validação ou feedback no JavaScript.");
   }
-  if (/dark|light|tema|theme|claro|escuro/i.test(html) && !/classList\.toggle|dataset\.theme|localStorage|prefers-color-scheme/i.test(js)) {
+  const hasExplicitThemeControl = /(?:id|class|data-[\w-]+|aria-label)=("[^"]*(?:theme|tema|dark|light|claro|escuro)[^"]*"|'[^']*(?:theme|tema|dark|light|claro|escuro)[^']*')|<button[^>]*>[^<]*(?:tema|theme|dark|light|claro|escuro)/i.test(html);
+  if (hasExplicitThemeControl && !/classList\.toggle|dataset\.theme|localStorage|prefers-color-scheme/i.test(js)) {
     issues.push("Toggle/tema visual sem implementação funcional no JavaScript.");
   }
   if (/<details\b|faq/i.test(html) && !/<details\b/i.test(html) && !/addEventListener\(['"]click|aria-expanded|classList\.toggle/i.test(js)) {
@@ -827,20 +846,30 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
 
   try {
     const plans = await buildPlans(supabase, model, run, project, job, currentFiles, skillsContext);
-    const tasks = currentFiles?.length ? await createImplementationTasks(supabase, model, run, job, project, plans) : [];
+    const tasks = currentFiles?.length ? await createImplementationTasks(supabase, model, run, job, project, plans) : await createInitialGenerationTasks(supabase, run);
     let files = currentFiles?.length
       ? await implementFiles(supabase, model, run, job, project, plans, tasks, currentFiles, skillsContext)
-      : await generateInitialFiles(supabase, model, run, job, project, plans, skillsContext);
+      : await generateInitialFiles(supabase, model, run, job, project, plans, skillsContext, tasks);
+    if (!currentFiles?.length && tasks[1]) await updateTask(supabase, tasks[1].id, { status: "running" });
     files = await synthesizeFinalFiles(supabase, model, run, job, project, plans, files, skillsContext);
+    if (!currentFiles?.length && tasks[1]) await updateTask(supabase, tasks[1].id, { status: "completed", completed_at: new Date().toISOString() });
+    if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "running" });
     const firstGateReport = deterministicQualityReport(project, job, files);
     if (!firstGateReport.passed) {
+      if (!currentFiles?.length && tasks[3]) await updateTask(supabase, tasks[3].id, { status: "running" });
       files = await repairFilesForQuality(supabase, model, run, job, project, plans, files, firstGateReport);
       const repairedGateReport = deterministicQualityReport(project, job, files);
       if (!repairedGateReport.passed) {
+          if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "failed", error: (repairedGateReport.blocking_issues || repairedGateReport.issues || []).slice(0, 4).join("; ") });
+        if (!currentFiles?.length && tasks[3]) await updateTask(supabase, tasks[3].id, { status: "failed", error: (repairedGateReport.blocking_issues || repairedGateReport.issues || []).slice(0, 4).join("; ") });
         await saveArtifact(supabase, run.id, "quality_gate_report", { blocked: true, beforeRepair: firstGateReport, afterRepair: repairedGateReport });
         throw new Error(`A IA gerou arquivos inseguros ou incompletos mesmo após reparo: ${(repairedGateReport.blocking_issues || repairedGateReport.issues || []).slice(0, 4).join("; ")}`);
       }
+      if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "completed", completed_at: new Date().toISOString() });
+      if (!currentFiles?.length && tasks[3]) await updateTask(supabase, tasks[3].id, { status: "completed", completed_at: new Date().toISOString() });
     } else {
+      if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "completed", completed_at: new Date().toISOString() });
+      if (!currentFiles?.length && tasks[3]) await updateTask(supabase, tasks[3].id, { status: "completed", completed_at: new Date().toISOString() });
       await saveArtifact(supabase, run.id, "quality_gate_report", { preservedAiOutput: true, report: firstGateReport });
     }
     const validationReport = await validateFiles(supabase, model, run, job, project, plans, files);
