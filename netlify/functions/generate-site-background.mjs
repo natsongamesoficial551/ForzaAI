@@ -642,13 +642,7 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
     ],
   }, { supabase, jobId: job.id });
   await saveArtifact(supabase, run.id, "model_raw_output", { expansion: true, content: expansion.slice(0, 120_000), issues: parsedReport.issues || [] });
-  const expanded = normalizeGeneratedFiles(expansion, project.name) ?? parsed;
-  const expandedReport = deterministicQualityReport(project, job, expanded);
-  if (expandedReport.passed) return expanded;
-
-  const fallbackFiles = deterministicPremiumFiles(project, job, plans, expandedReport.blocking_issues || expandedReport.issues || []);
-  await saveArtifact(supabase, run.id, "deterministic_quality_fallback", { issues: expandedReport.issues || [], blocking_issues: expandedReport.blocking_issues || [] });
-  return fallbackFiles;
+  return normalizeGeneratedFiles(expansion, project.name) ?? parsed;
 }
 
 function visibleTextFromHtml(html) {
