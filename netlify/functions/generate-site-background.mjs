@@ -113,8 +113,14 @@ function normalizeText(value) {
   return String(value || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
 
+function userExplicitlyRequestedTheme(project, job) {
+  const source = normalizeText(`${project.name || ""} ${project.description || ""} ${job.message || ""}`);
+  return /(?:modo|tema|theme|toggle|botao|botão|alternar|trocar).{0,35}(?:claro|escuro|dark|light)|(?:claro|escuro|dark|light).{0,35}(?:modo|tema|theme|toggle|botao|botão|alternar|trocar)/i.test(source);
+}
+
 function projectTypeRequirements(project, job) {
   const source = normalizeText(`${project.site_type || ""} ${project.name || ""} ${project.description || ""} ${job.message || ""}`);
+  const themeRequested = userExplicitlyRequestedTheme(project, job);
   const includesAny = (terms) => terms.some((term) => source.includes(term));
   const type = includesAny(["ecommerce", "e-commerce", "loja", "produto", "catalogo", "carrinho", "checkout", "comprar"])
     ? "ecommerce"
@@ -130,28 +136,28 @@ function projectTypeRequirements(project, job) {
       required_sections: ["Hero comercial", "Categorias", "Catálogo com 6+ produtos", "Carrinho", "Benefícios", "Depoimentos", "FAQ", "Newsletter", "Footer"],
       required_features: ["Produtos com nome, preço, categoria, visual e botão comprar", "Carrinho com contagem, total e remover item", "Filtros/categorias", "Newsletter com feedback"],
       minimums: { sections: 7, headings: 6, cards: 10, products: 6, visibleText: 1800, cssRules: 35 },
-      checklist: "Catálogo inicial com 6+ produtos reais/mockados, nenhum estado padrão de 0 produtos, cards com preço/categoria/botão, carrinho funcional com adicionar/remover/total, hero comercial acima da dobra, benefícios, depoimentos, FAQ e newsletter.",
+      checklist: `Catálogo inicial com 6+ produtos reais/mockados, nenhum estado padrão de 0 produtos, cards com preço/categoria/botão, carrinho funcional com adicionar/remover/total, hero comercial acima da dobra, benefícios, depoimentos, FAQ e newsletter.${themeRequested ? " Tema claro/escuro funcional porque foi pedido explicitamente." : " Não criar botão/ícone de tema claro/escuro porque o usuário não pediu."}`,
     },
     portfolio: {
       type,
       required_sections: ["Hero com persona", "Serviços", "4+ projetos/cases", "Processo", "Depoimentos", "Contato", "Footer"],
       required_features: ["Cases com contexto e resultado", "Formulário de contato com feedback", "Links âncora", "Prova social"],
       minimums: { sections: 6, headings: 6, cards: 8, cases: 4, visibleText: 1600, cssRules: 30 },
-      checklist: "Hero com nome/persona, serviços claros, 4+ cases/projetos com detalhes, processo, depoimentos, contato funcional e nenhuma seção vazia.",
+      checklist: `Hero com nome/persona, serviços claros, 4+ cases/projetos com detalhes, processo, depoimentos, contato funcional e nenhuma seção vazia.${themeRequested ? " Tema claro/escuro funcional porque foi pedido explicitamente." : " Não criar botão/ícone de tema claro/escuro porque o usuário não pediu."}`,
     },
     saas: {
       type,
       required_sections: ["Landing", "Dashboard mockado", "Onboarding/login visual", "Pricing", "Settings/billing", "Métricas", "FAQ", "Footer"],
       required_features: ["Dashboard com dados mockados", "Tabs ou navegação entre telas", "Planos/preços", "Estados visuais de produto", "Formulários com feedback"],
       minimums: { sections: 7, headings: 6, cards: 9, appBlocks: 3, visibleText: 1700, cssRules: 35 },
-      checklist: "Landing completa, pricing, dashboard mockado com métricas, onboarding/login visual, settings/billing, dados mockados coerentes e interações visíveis funcionando.",
+      checklist: `Landing completa, pricing, dashboard mockado com métricas, onboarding/login visual, settings/billing, dados mockados coerentes e interações visíveis funcionando.${themeRequested ? " Tema claro/escuro funcional porque foi pedido explicitamente." : " Não criar botão/ícone de tema claro/escuro porque o usuário não pediu."}`,
     },
     business: {
       type,
       required_sections: ["Hero", "Solução", "Benefícios", "Prova social", "Oferta/planos", "FAQ", "Contato", "Footer"],
       required_features: ["CTA principal", "Formulário com feedback", "Navegação", "FAQ ou interação equivalente"],
       minimums: { sections: 6, headings: 5, cards: 8, visibleText: 1500, cssRules: 28 },
-      checklist: "Hero completo acima da dobra, solução específica do briefing, benefícios, prova social, oferta clara, FAQ, contato funcional e conteúdo real em todas as seções.",
+      checklist: `Hero completo acima da dobra, solução específica do briefing, benefícios, prova social, oferta clara, FAQ, contato funcional e conteúdo real em todas as seções.${themeRequested ? " Tema claro/escuro funcional porque foi pedido explicitamente." : " Não criar botão/ícone de tema claro/escuro porque o usuário não pediu."}`,
     },
   };
 
@@ -169,6 +175,7 @@ function deliveryContract(project, job, plans) {
     site_type: project.site_type,
     inferred_type: typeRequirements.type,
     semantic_requirements: typeRequirements,
+    theme_requested: userExplicitlyRequestedTheme(project, job),
     must_preserve: [
       "O pedido original é a fonte da verdade e deve aparecer em todas as decisões de produto, telas, copy e validação.",
       "A entrega final sempre precisa conter index.html, styles.css e script.js completos e coerentes entre si.",
@@ -176,6 +183,8 @@ function deliveryContract(project, job, plans) {
       "O resultado deve parecer um produto/site final premium, não scaffold, placeholder, wireframe ou home genérica.",
       "A primeira dobra da página precisa ter hero completo visível imediatamente: título, subtítulo, CTA, apoio visual/card e sem área branca/vazia dominante.",
       "Nunca entregue apenas header, footer e espaço em branco; cada seção deve conter texto real e elementos visuais suficientes.",
+      "Não crie botão, ícone de lua/sol ou modo claro/escuro se o usuário não pedir explicitamente; se pedir, precisa ser funcional no script.js.",
+      "Cada projeto deve ter layout, paleta, nomes, seções, componentes e narrativa derivados do briefing; não repita a mesma estrutura genérica entre sites.",
     ],
     required_sections: productPlan.pages ?? technicalPlan.screens ?? typeRequirements.required_sections,
     required_features: productPlan.features ?? typeRequirements.required_features,
@@ -186,7 +195,7 @@ function deliveryContract(project, job, plans) {
       "Sem TODO, lorem ipsum, placeholders, segredos, SQL sensível, service role, API keys ou eval.",
       "CSS com media queries e componentes suficientes para desktop/mobile.",
       "JS seguro para navegação/interações sem innerHTML com dados variáveis.",
-      "Todo botão, formulário, tab, filtro, carrinho, modal, FAQ, toggle claro/escuro ou menu visível precisa ter comportamento funcional seguro no script.js.",
+      "Todo botão, formulário, tab, filtro, carrinho, modal, FAQ ou menu visível precisa ter comportamento funcional seguro no script.js; toggle claro/escuro só deve existir se o usuário pedir explicitamente.",
       "Formulários devem validar campos e exibir feedback de sucesso/erro sem enviar dados reais.",
       "Evite telas brancas: use backgrounds, grids, cards, imagens/ilustrações CSS, métricas, listas e blocos de conteúdo na viewport inicial.",
       "Evite min-height excessivo em seções sem conteúdo; nenhuma seção pode parecer vazia no preview."
@@ -573,7 +582,7 @@ async function generateInitialFiles(supabase, model, run, job, project, plans, s
     messages: [
       {
         role: "system",
-        content: "Você é o gerador principal do ForzaAI. Gere a entrega completa em UMA resposta, sem dividir em etapas. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: página completa e publicável, específica do briefing, com conteúdo real. Não deixe hero/body vazios. A primeira viewport precisa mostrar hero completo com título grande, subtítulo, CTA, prova/metric card e visual premium; nunca entregue header+footer com miolo branco. Inclua no mínimo 7 seções reais, 6 headings h1-h3, 1800+ caracteres de texto visível, 8+ cards/list items, CTA, FAQ e footer. CSS responsivo com @media, background visível, espaçamento equilibrado e sem min-height que gere áreas vazias. JS seguro e funcional para todos os elementos interativos visíveis: formulário, tema claro/escuro, menu, tabs, filtros, carrinho, modais e FAQ quando existirem. Não use eval, innerHTML com dados variáveis, API keys, SQL sensível ou scripts remotos desconhecidos.",
+        content: "Você é o gerador principal do ForzaAI. Gere a entrega completa em UMA resposta, sem dividir em etapas. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: página completa e publicável, específica do briefing, com conteúdo real. Não deixe hero/body vazios. A primeira viewport precisa mostrar hero completo com título grande, subtítulo, CTA, prova/metric card e visual premium; nunca entregue header+footer com miolo branco. Inclua no mínimo 7 seções reais, 6 headings h1-h3, 1800+ caracteres de texto visível, 8+ cards/list items, CTA, FAQ e footer. CSS responsivo com @media, background visível, espaçamento equilibrado e sem min-height que gere áreas vazias. JS seguro e funcional para todos os elementos interativos visíveis: formulário, menu, tabs, filtros, carrinho, modais e FAQ quando existirem; tema claro/escuro somente se o usuário pedir explicitamente. Não use eval, innerHTML com dados variáveis, API keys, SQL sensível ou scripts remotos desconhecidos. Não repita estrutura genérica: escolha uma direção visual única baseada no briefing, com paleta, grid, hero, cards, navegação, nomes, seções e microcopy diferentes para este projeto específico.",
       },
       {
         role: "user",
@@ -604,7 +613,7 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
         messages: [
           {
             role: "system",
-            content: "Você é o implementador principal do ForzaAI. O pedido original e o contrato de entrega são a fonte da verdade. Aplique a task atual SEM perder escopo, telas, copy ou componentes já criados. Retorne SEMPRE os três arquivos completos, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nMantenha tudo coeso, responsivo, acessível e com visual premium. Para SaaS, simule produto completo: landing, auth visual, dashboard, onboarding, planos, settings, dados mockados e estados reais. Para portfólio/site comercial, entregue hero, prova social, serviços/cases, processo, pricing/oferta, FAQ e contato. Segurança obrigatória: não use eval, innerHTML com dados variáveis, scripts remotos desconhecidos, API keys, service role, SQL ou endpoints sensíveis no código gerado. Interações obrigatórias: botões visíveis devem ter ação segura, links âncora devem rolar suavemente, formulários devem validar e mostrar feedback, toggles claro/escuro devem alternar tema, menus/tabs/filtros/carrinho/modais/FAQ visíveis devem funcionar no script.js.",
+            content: "Você é o implementador principal do ForzaAI. O pedido original e o contrato de entrega são a fonte da verdade. Aplique a task atual SEM perder escopo, telas, copy ou componentes já criados. Retorne SEMPRE os três arquivos completos, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nMantenha tudo coeso, responsivo, acessível e com visual premium. Para SaaS, simule produto completo: landing, auth visual, dashboard, onboarding, planos, settings, dados mockados e estados reais. Para portfólio/site comercial, entregue hero, prova social, serviços/cases, processo, pricing/oferta, FAQ e contato. Segurança obrigatória: não use eval, innerHTML com dados variáveis, scripts remotos desconhecidos, API keys, service role, SQL ou endpoints sensíveis no código gerado. Interações obrigatórias: botões visíveis devem ter ação segura, links âncora devem rolar suavemente, formulários devem validar e mostrar feedback, menus/tabs/filtros/carrinho/modais/FAQ visíveis devem funcionar no script.js. Toggle claro/escuro só pode existir quando o pedido original mencionar isso explicitamente; caso contrário, não gere ícone de lua/sol nem botão de tema. Cada edição precisa aplicar exatamente o pedido do usuário e mudar o site de forma perceptível, não apenas revalidar arquivos.",
           },
           {
             role: "user",
@@ -646,7 +655,7 @@ async function synthesizeFinalFiles(supabase, model, run, job, project, plans, f
     messages: [
       {
         role: "system",
-        content: "Você é o finalizador principal do ForzaAI. Releia o pedido original, contrato, planos e arquivos atuais. Produza uma versão final coesa e premium que preserve o escopo inteiro e corrija lacunas antes da validação. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: produto/site completo, bonito, específico do briefing, responsivo, acessível, com copy BR, sem placeholders e sem segredos. Antes de responder, verifique mentalmente se o preview inicial não fica branco: acima da dobra deve existir hero com conteúdo, CTA, visual/card e densidade visual suficiente. Todo elemento interativo visível precisa funcionar no script.js com comportamento seguro e feedback claro. Evite seções com min-height exagerado, espaços vazios gigantes, header sobrepondo conteúdo, texto colado ou títulos cortados; use scroll-margin-top nas âncoras e line-height legível.",
+        content: "Você é o finalizador principal do ForzaAI. Releia o pedido original, contrato, planos e arquivos atuais. Produza uma versão final coesa e premium que preserve o escopo inteiro e corrija lacunas antes da validação. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: produto/site completo, bonito, específico do briefing, responsivo, acessível, com copy BR, sem placeholders e sem segredos. Antes de responder, verifique mentalmente se o preview inicial não fica branco: acima da dobra deve existir hero com conteúdo, CTA, visual/card e densidade visual suficiente. Todo elemento interativo visível precisa funcionar no script.js com comportamento seguro e feedback claro. Não adicione toggle claro/escuro, ícone de lua/sol ou lógica de tema se isso não estiver explicitamente no pedido. Evite seções com min-height exagerado, espaços vazios gigantes, header sobrepondo conteúdo, texto colado ou títulos cortados; use scroll-margin-top nas âncoras e line-height legível. Antes de responder, compare mentalmente com uma landing genérica: se a estrutura poderia servir para qualquer cliente, personalize mais o layout, copy, seções e componentes para este briefing.",
       },
       {
         role: "user",
@@ -668,7 +677,7 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
     messages: [
       {
         role: "system",
-        content: "Você é o reparador final do ForzaAI. Corrija somente as lacunas objetivas apontadas, mantendo a IA como autora do site e preservando o pedido original. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: HTML premium e completo, CSS robusto com responsividade usando @media, JS seguro sem eval/segredos, zero placeholders/TODO/lorem ipsum, conteúdo específico do pedido. Nunca deixe hero ou body vazios. Antes de responder, confira internamente se os mínimos semânticos do contrato foram cumpridos, se catálogo/cases/dashboard têm quantidade suficiente, se todo botão visível tem comportamento real e se o ajuste pedido aparece no código.",
+        content: "Você é o reparador final do ForzaAI. Corrija somente as lacunas objetivas apontadas, mantendo a IA como autora do site e preservando o pedido original. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: HTML premium e completo, CSS robusto com responsividade usando @media, JS seguro sem eval/segredos, zero placeholders/TODO/lorem ipsum, conteúdo específico do pedido. Nunca deixe hero ou body vazios. Antes de responder, confira internamente se os mínimos semânticos do contrato foram cumpridos, se catálogo/cases/dashboard têm quantidade suficiente, se todo botão visível tem comportamento real, se o ajuste pedido aparece no código e se não existe tema claro/escuro quando não foi pedido.",
       },
       {
         role: "user",
@@ -689,7 +698,7 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
     messages: [
       {
         role: "system",
-        content: "Você é o expansor final de conteúdo do ForzaAI. O HTML atual é válido, mas insuficiente. Não resuma. Reescreva os três arquivos completos com uma página cheia e navegável. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nRegras: no mínimo 7 seções reais, 6 headings h1-h3, 1400+ caracteres de texto visível, cards/listas, CTA, FAQ e footer. Nada de conteúdo vazio. Formulários, tema claro/escuro, filtros, carrinho, tabs, modais, menu mobile e FAQ visíveis precisam funcionar no script.js.",
+        content: "Você é o expansor final de conteúdo do ForzaAI. O HTML atual é válido, mas insuficiente. Não resuma. Reescreva os três arquivos completos com uma página cheia e navegável. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nRegras: no mínimo 7 seções reais, 6 headings h1-h3, 1400+ caracteres de texto visível, cards/listas, CTA, FAQ e footer. Nada de conteúdo vazio. Formulários, filtros, carrinho, tabs, modais, menu mobile e FAQ visíveis precisam funcionar no script.js. Tema claro/escuro só deve existir se o usuário pediu explicitamente; se não pediu, remova ícone de lua/sol e qualquer toggle de tema.",
       },
       {
         role: "user",
@@ -782,8 +791,10 @@ function analyzeGeneratedSite(project, job, files) {
   if (metrics.cards < minimums.cards) addWarning("Poucos cards/list items para densidade visual.", `Inclua pelo menos ${minimums.cards} cards/itens relevantes ao tipo ${requirements.type}.`);
   if (!/@media\b/i.test(css)) addWarning("CSS sem media query responsiva.", "Adicione media queries para tablet/mobile.");
   if (/<form\b/i.test(html) && !/addEventListener\(['"]submit|onsubmit|checkValidity|preventDefault/i.test(js)) addWarning("Formulário visível sem validação/feedback.", "Implemente submit com preventDefault, validação e mensagem de sucesso/erro.");
-  const wantsTheme = /claro|escuro|dark|light|tema|theme/i.test(`${job.message || ""} ${html}`);
-  if (wantsTheme && !/dataset\.theme|localStorage|prefers-color-scheme|classList\.toggle/i.test(js)) addWarning("Tema claro/escuro sem implementação funcional.", "Adicione botão no header, variáveis CSS, document.documentElement.dataset.theme e persistência em localStorage.");
+  const themeRequested = userExplicitlyRequestedTheme(project, job);
+  const hasThemeUi = /(?:moon|sun|lua|sol|theme|tema|dark|light|claro|escuro)|🌙|☀️|<button[^>]*(?:aria-label|class|id)=["'][^"']*(?:theme|tema|dark|light|claro|escuro|moon|sun|lua|sol)/i.test(`${html}\n${js}`);
+  if (!themeRequested && hasThemeUi) addBlocking("Tema claro/escuro foi criado sem pedido do usuário.", "Remova botão/ícone de lua/sol, classes e JavaScript de alternância de tema; mantenha uma paleta fixa adequada ao briefing.");
+  if (themeRequested && !/dataset\.theme|localStorage|prefers-color-scheme|classList\.toggle/i.test(js)) addBlocking("Tema claro/escuro pedido, mas sem implementação funcional.", "Adicione botão no header, variáveis CSS, document.documentElement.dataset.theme e persistência em localStorage.");
 
   const issues = [...blocking, ...warnings];
   return { passed: blocking.length === 0, score: Math.max(55, 100 - blocking.length * 16 - warnings.length * 4), summary: blocking.length === 0 ? "Estrutura mínima aprovada; warnings registrados para melhoria." : "Estrutura mínima incompleta; reparo por IA recomendado antes de salvar.", type: requirements.type, metrics, blocking, warnings, repairInstructions: [...new Set(repairInstructions)].slice(0, 12), issues, blocking_issues: blocking };
@@ -928,7 +939,7 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
       structuralReport = analyzeGeneratedSite(project, job, files);
       await saveArtifact(supabase, run.id, "structural_analysis", { attempt: 2, report: structuralReport });
     }
-    if (structuralReport.blocking.length && structuralReport.blocking.some((issue) => /Arquivo obrigatório|Body sem conteúdo real|catálogo inicial insuficiente|poucos projetos|sem blocos suficientes|Hero acima da dobra|Primeira dobra provavelmente branca|CSS pode esconder/i.test(issue))) {
+    if (structuralReport.blocking.length && structuralReport.blocking.some((issue) => /Arquivo obrigatório|Body sem conteúdo real|catálogo inicial insuficiente|poucos projetos|sem blocos suficientes|Hero acima da dobra|Primeira dobra provavelmente branca|CSS pode esconder|Tema claro\/escuro/i.test(issue))) {
       files = await repairFilesForQuality(supabase, model, run, job, project, plans, files, structuralReport);
       structuralReport = analyzeGeneratedSite(project, job, files);
       await saveArtifact(supabase, run.id, "structural_analysis", { attempt: 3, report: structuralReport });
