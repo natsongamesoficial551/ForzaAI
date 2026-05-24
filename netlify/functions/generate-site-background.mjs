@@ -200,7 +200,7 @@ function deterministicPremiumFiles(project, job, plans, reason = []) {
       <div class="cards-grid">${modules.map((item, index) => `<article class="feature-card reveal"><span>0${index + 1}</span><h3>${item}</h3><p>${isPortfolio ? "Mostra valor profissional com clareza, estética e contexto de negócio para cada case." : "Ajuda o visitante a entender rapidamente o valor e avançar para o próximo passo."}</p></article>`).join("")}</div>
     </section>
     <section id="projetos" class="showcase section-grid">
-      <div><p class="eyebrow">Experiência</p><h2>${isPortfolio ? "Cases com narrativa, processo e resultado." : "Produto demonstrável antes da integração final."}</h2><p>Cada bloco usa dados demonstrativos para mostrar fluxos reais com uma interface pronta para evoluir para integrações server-side.</p></div>
+      <div><p class="eyebrow">Experiência</p><h2>${isPortfolio ? "Cases com narrativa, processo e resultado." : "Produto demonstrável antes da integração final."}</h2><p>Cada bloco usa dados demonstrativos para mostrar fluxos reais com uma interface pronta para evoluir para integrações server-side, incluindo onboarding, login visual, dashboard e settings de billing.</p></div>
       <div class="workspace-card">
         <div class="tabs"><button class="active" type="button">Visão geral</button><button type="button">Métricas</button><button type="button">Configuração</button></div>
         <div class="workspace-content"><h3>${isPortfolio ? "Case: redesign de marca SaaS" : "Dashboard do cliente"}</h3><p>Visão de métricas, status e próximos passos em uma interface limpa e objetiva.</p><div class="progress"><span style="width:76%"></span></div><div class="task-list"><p>Briefing validado</p><p>Identidade aplicada</p><p>Fluxo responsivo aprovado</p></div></div>
@@ -642,7 +642,13 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
     ],
   }, { supabase, jobId: job.id });
   await saveArtifact(supabase, run.id, "model_raw_output", { expansion: true, content: expansion.slice(0, 120_000), issues: parsedReport.issues || [] });
-  return normalizeGeneratedFiles(expansion, project.name) ?? parsed;
+  const expanded = normalizeGeneratedFiles(expansion, project.name) ?? parsed;
+  const expandedReport = deterministicQualityReport(project, job, expanded);
+  if (expandedReport.passed) return expanded;
+
+  const fallbackFiles = deterministicPremiumFiles(project, job, plans, expandedReport.blocking_issues || expandedReport.issues || []);
+  await saveArtifact(supabase, run.id, "deterministic_quality_fallback", { issues: expandedReport.issues || [], blocking_issues: expandedReport.blocking_issues || [] });
+  return fallbackFiles;
 }
 
 function visibleTextFromHtml(html) {
@@ -683,14 +689,15 @@ function deterministicQualityReport(project, job, files) {
   if (/<form\b/i.test(html) && !/addEventListener\(['"]submit|onsubmit|checkValidity|preventDefault/i.test(js)) {
     issues.push("Formulário visível sem validação ou feedback no JavaScript.");
   }
-  const hasExplicitThemeControl = /(?:id|class|data-[\w-]+|aria-label)=("[^"]*(?:theme|tema|dark|light|claro|escuro)[^"]*"|'[^']*(?:theme|tema|dark|light|claro|escuro)[^']*')|<button[^>]*>[^<]*(?:tema|theme|dark|light|claro|escuro)/i.test(html);
+  const hasExplicitThemeControl = /(?:id|class|data-[\w-]+|aria-label)=("[^"]*(?:\btheme\b|\btema\b|\bdark\b|\blight\b|\bclaro\b|\bescuro\b)[^"]*"|'[^']*(?:\btheme\b|\btema\b|\bdark\b|\blight\b|\bclaro\b|\bescuro\b)[^']*')|<button[^>]*>[^<]*(?:tema|theme|dark|light|claro|escuro)/i.test(html);
   if (hasExplicitThemeControl && !/classList\.toggle|dataset\.theme|localStorage|prefers-color-scheme/i.test(js)) {
     issues.push("Toggle/tema visual sem implementação funcional no JavaScript.");
   }
   if (/<details\b|faq/i.test(html) && !/<details\b/i.test(html) && !/addEventListener\(['"]click|aria-expanded|classList\.toggle/i.test(js)) {
     issues.push("FAQ/interação expansível sem comportamento funcional.");
   }
-  if (/cart|carrinho|add-to-cart|adicionar/i.test(html) && !/cart|carrinho|addEventListener\(['"]click|quantity|total/i.test(js)) {
+  const hasCartControl = /\b(cart|carrinho|add-to-cart|checkout)\b|<button[^>]*>[^<]*(?:comprar|adicionar ao carrinho)/i.test(html);
+  if (hasCartControl && !/cart|carrinho|addEventListener\(['"]click|quantity|total/i.test(js)) {
     issues.push("Carrinho ou ações de compra visíveis sem lógica básica no JavaScript.");
   }
 
