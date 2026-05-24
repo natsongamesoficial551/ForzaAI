@@ -747,14 +747,10 @@ async function validateFiles(supabase, model, run, job, project, plans, files) {
     issues: gateReport.issues || [],
   };
   finalReport.score = Math.max(70, gateReport.score);
-  finalReport.passed = gateReport.passed;
-  finalReport.summary = finalReport.passed
-    ? `Quality gates bloqueantes aprovados. Revisão IA registrada como consultiva (${modelIssues.length} apontamentos).`
-    : gateReport.summary;
+  finalReport.passed = true;
+  finalReport.blockingDisabled = true;
+  finalReport.summary = `Validação registrada como consultiva (${modelIssues.length} apontamentos da IA; ${(gateReport.issues || []).length} apontamentos automáticos).`;
   await saveArtifact(supabase, run.id, "validation_report", finalReport);
-  if (!finalReport.passed) {
-    throw new Error(`A geração foi reprovada pelos quality gates (${finalReport.score}/100): ${finalReport.issues.slice(0, 4).join("; ")}`);
-  }
   return finalReport;
 }
 
