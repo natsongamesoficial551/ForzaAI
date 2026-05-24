@@ -719,7 +719,7 @@ function deterministicQualityReport(project, job, files) {
     if (found < 4) issues.push("SaaS/app não possui telas e fluxos suficientes além de uma home.");
   }
 
-  const blockingIssues = issues.filter((issue) => /Arquivo obrigatório|padrão inseguro|possível segredo|Conteúdo visível insuficiente|Poucas seções|Poucos títulos|Formulário visível|Toggle\/tema visual|Carrinho ou ações de compra/i.test(issue));
+  const blockingIssues = issues.filter((issue) => /Arquivo obrigatório|padrão inseguro|possível segredo|Conteúdo visível insuficiente|Poucas seções|Poucos títulos|Preview parece scaffold genérico|placeholders ou conteúdo incompleto/i.test(issue));
   return {
     passed: blockingIssues.length === 0,
     score: Math.max(55, 100 - issues.length * 10),
