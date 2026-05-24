@@ -109,14 +109,66 @@ function escapeHtml(value) {
   return String(value || "").replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
 }
 
+function normalizeText(value) {
+  return String(value || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+function projectTypeRequirements(project, job) {
+  const source = normalizeText(`${project.site_type || ""} ${project.name || ""} ${project.description || ""} ${job.message || ""}`);
+  const includesAny = (terms) => terms.some((term) => source.includes(term));
+  const type = includesAny(["ecommerce", "e-commerce", "loja", "produto", "catalogo", "carrinho", "checkout", "comprar"])
+    ? "ecommerce"
+    : includesAny(["portfolio", "portifolio", "designer", "freelancer", "fotografo", "dev", "criativo", "case"])
+      ? "portfolio"
+      : includesAny(["saas", "dashboard", "app", "sistema", "crm", "billing", "pricing", "assinatura", "login"])
+        ? "saas"
+        : "business";
+
+  const requirements = {
+    ecommerce: {
+      type,
+      required_sections: ["Hero comercial", "Categorias", "Catálogo com 6+ produtos", "Carrinho", "Benefícios", "Depoimentos", "FAQ", "Newsletter", "Footer"],
+      required_features: ["Produtos com nome, preço, categoria, visual e botão comprar", "Carrinho com contagem, total e remover item", "Filtros/categorias", "Newsletter com feedback"],
+      minimums: { sections: 7, headings: 6, cards: 10, products: 6, visibleText: 1800, cssRules: 35 },
+      checklist: "Catálogo inicial com 6+ produtos reais/mockados, nenhum estado padrão de 0 produtos, cards com preço/categoria/botão, carrinho funcional com adicionar/remover/total, hero comercial acima da dobra, benefícios, depoimentos, FAQ e newsletter.",
+    },
+    portfolio: {
+      type,
+      required_sections: ["Hero com persona", "Serviços", "4+ projetos/cases", "Processo", "Depoimentos", "Contato", "Footer"],
+      required_features: ["Cases com contexto e resultado", "Formulário de contato com feedback", "Links âncora", "Prova social"],
+      minimums: { sections: 6, headings: 6, cards: 8, cases: 4, visibleText: 1600, cssRules: 30 },
+      checklist: "Hero com nome/persona, serviços claros, 4+ cases/projetos com detalhes, processo, depoimentos, contato funcional e nenhuma seção vazia.",
+    },
+    saas: {
+      type,
+      required_sections: ["Landing", "Dashboard mockado", "Onboarding/login visual", "Pricing", "Settings/billing", "Métricas", "FAQ", "Footer"],
+      required_features: ["Dashboard com dados mockados", "Tabs ou navegação entre telas", "Planos/preços", "Estados visuais de produto", "Formulários com feedback"],
+      minimums: { sections: 7, headings: 6, cards: 9, appBlocks: 3, visibleText: 1700, cssRules: 35 },
+      checklist: "Landing completa, pricing, dashboard mockado com métricas, onboarding/login visual, settings/billing, dados mockados coerentes e interações visíveis funcionando.",
+    },
+    business: {
+      type,
+      required_sections: ["Hero", "Solução", "Benefícios", "Prova social", "Oferta/planos", "FAQ", "Contato", "Footer"],
+      required_features: ["CTA principal", "Formulário com feedback", "Navegação", "FAQ ou interação equivalente"],
+      minimums: { sections: 6, headings: 5, cards: 8, visibleText: 1500, cssRules: 28 },
+      checklist: "Hero completo acima da dobra, solução específica do briefing, benefícios, prova social, oferta clara, FAQ, contato funcional e conteúdo real em todas as seções.",
+    },
+  };
+
+  return requirements[type];
+}
+
 function deliveryContract(project, job, plans) {
   const request = job.message || project.description || project.name || "site premium";
   const productPlan = plans?.productPlan ?? {};
   const technicalPlan = plans?.technicalPlan ?? {};
+  const typeRequirements = projectTypeRequirements(project, job);
   return {
     original_request: request,
     project_name: project.name,
     site_type: project.site_type,
+    inferred_type: typeRequirements.type,
+    semantic_requirements: typeRequirements,
     must_preserve: [
       "O pedido original é a fonte da verdade e deve aparecer em todas as decisões de produto, telas, copy e validação.",
       "A entrega final sempre precisa conter index.html, styles.css e script.js completos e coerentes entre si.",
@@ -125,8 +177,8 @@ function deliveryContract(project, job, plans) {
       "A primeira dobra da página precisa ter hero completo visível imediatamente: título, subtítulo, CTA, apoio visual/card e sem área branca/vazia dominante.",
       "Nunca entregue apenas header, footer e espaço em branco; cada seção deve conter texto real e elementos visuais suficientes.",
     ],
-    required_sections: productPlan.pages ?? technicalPlan.screens ?? ["Landing", "Onboarding", "Dashboard", "Pricing", "Settings", "Contato"],
-    required_features: productPlan.features ?? ["Navegação", "CTAs", "Dados mockados", "Estados vazios", "Responsividade", "Interações seguras"],
+    required_sections: productPlan.pages ?? technicalPlan.screens ?? typeRequirements.required_sections,
+    required_features: productPlan.features ?? typeRequirements.required_features,
     acceptance_criteria: [
       ...(productPlan.quality_criteria ?? []),
       "Visual premium com hierarquia, espaçamento, responsividade e microinterações.",
@@ -616,18 +668,18 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
     messages: [
       {
         role: "system",
-        content: "Você é o reparador final do ForzaAI. Recrie e expanda os três arquivos completos para passar quality gates determinísticos. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: HTML premium e completo, CSS robusto com responsividade usando @media, JS seguro sem eval/segredos, zero placeholders/TODO/lorem ipsum, conteúdo específico do pedido. Nunca deixe hero ou body vazios. Inclua no mínimo 6 seções visíveis, 5 títulos, copy real e cards/itens suficientes. Para e-commerce, inclua hero, categorias, vitrine de produtos, benefícios, prova social, FAQ e footer. Para portfólio, inclua hero, bio, serviços, cases/projetos, processo, depoimentos/prova social e contato. Para SaaS/app, inclua landing, onboarding, dashboard, pricing/billing, settings e dados mockados seguros.",
+        content: "Você é o reparador final do ForzaAI. Corrija somente as lacunas objetivas apontadas, mantendo a IA como autora do site e preservando o pedido original. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: HTML premium e completo, CSS robusto com responsividade usando @media, JS seguro sem eval/segredos, zero placeholders/TODO/lorem ipsum, conteúdo específico do pedido. Nunca deixe hero ou body vazios. Antes de responder, confira internamente se os mínimos semânticos do contrato foram cumpridos, se catálogo/cases/dashboard têm quantidade suficiente, se todo botão visível tem comportamento real e se o ajuste pedido aparece no código.",
       },
       {
         role: "user",
-        content: `Contrato obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nPlanos:\n${JSON.stringify(plans)}\n\nProblemas detectados:\n${(gateReport.issues || []).join("\n")}\n\nArquivos atuais:\n${filesContext(files)}`,
+        content: `Contrato obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nPlanos:\n${JSON.stringify(plans)}\n\nProblemas bloqueantes:\n${(gateReport.blocking || gateReport.blocking_issues || []).join("\n")}\n\nWarnings úteis:\n${(gateReport.warnings || []).join("\n")}\n\nInstruções objetivas de reparo:\n${(gateReport.repairInstructions || gateReport.issues || []).join("\n")}\n\nMétricas atuais:\n${JSON.stringify(gateReport.metrics || {})}\n\nArquivos atuais:\n${filesContext(files)}`,
       },
     ],
   }, { supabase, jobId: job.id });
   await saveArtifact(supabase, run.id, "model_raw_output", { repair: true, content: content.slice(0, 120_000), issues: gateReport.issues || [] });
   const parsed = normalizeGeneratedFiles(content, project.name);
   if (!parsed) return files;
-  const parsedReport = deterministicQualityReport(project, job, parsed);
+  const parsedReport = analyzeGeneratedSite(project, job, parsed);
   if (parsedReport.passed) return parsed;
 
   await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: expandindo conteúdo visível…");
@@ -658,79 +710,79 @@ function visibleTextFromHtml(html) {
     .trim();
 }
 
-function deterministicQualityReport(project, job, files) {
-  const byPath = Object.fromEntries(files.map((file) => [file.path, file.content || ""]));
+function analyzeGeneratedSite(project, job, files) {
+  const byPath = Object.fromEntries((files || []).map((file) => [file.path, file.content || ""]));
   const html = byPath["index.html"] || "";
   const css = byPath["styles.css"] || "";
   const js = byPath["script.js"] || "";
   const combined = `${html}\n${css}\n${js}`;
   const visibleText = visibleTextFromHtml(html);
-  const sectionCount = (html.match(/<section\b/gi) || []).length;
-  const headingCount = (html.match(/<h[1-3]\b/gi) || []).length;
-  const issues = [];
-
-  for (const path of ["index.html", "styles.css", "script.js"]) {
-    if (!byPath[path]?.trim()) issues.push(`Arquivo obrigatório ausente ou vazio: ${path}`);
-  }
-  if (html.length < 6000) issues.push("HTML curto demais para uma entrega premium completa.");
-  if (visibleText.length < 1200) issues.push("Conteúdo visível insuficiente para uma página completa.");
-  if (sectionCount < 4) issues.push("Poucas seções visíveis para a página solicitada.");
-  if (headingCount < 4) issues.push("Poucos títulos/seções estruturadas no HTML.");
-  if (css.length < 2500) issues.push("CSS curto demais para layout responsivo e visual premium.");
-  if (!/@media\b/i.test(css)) issues.push("CSS não contém responsividade mínima com media queries.");
-  if (/ForzaAI\s*<\/h1>|Home\s*<\/button>|Templates\s*<\/button>|Analytics\s*<\/button>|Configurações\s*<\/button>/i.test(html)) {
-    issues.push("Preview parece scaffold genérico do ForzaAI, não o site solicitado.");
-  }
-  const contentWithoutAttributes = combined.replace(/\splaceholder=("[^"]*"|'[^']*')/gi, "");
-  if (/TODO|lorem ipsum|coming soon|em breve/i.test(contentWithoutAttributes)) issues.push("Arquivos contêm placeholders ou conteúdo incompleto.");
-  if (/eval\s*\(|service[_-]?role|api[_-]?key\s*=|sk-[a-z0-9]{20,}/i.test(combined)) issues.push("Arquivos contêm padrão inseguro ou possível segredo.");
-  if (/<form\b/i.test(html) && !/addEventListener\(['"]submit|onsubmit|checkValidity|preventDefault/i.test(js)) {
-    issues.push("Formulário visível sem validação ou feedback no JavaScript.");
-  }
-  const hasExplicitThemeControl = /(?:id|class|data-[\w-]+|aria-label)=("[^"]*(?:\btheme\b|\btema\b|\bdark\b|\blight\b|\bclaro\b|\bescuro\b)[^"]*"|'[^']*(?:\btheme\b|\btema\b|\bdark\b|\blight\b|\bclaro\b|\bescuro\b)[^']*')|<button[^>]*>[^<]*(?:tema|theme|dark|light|claro|escuro)/i.test(html);
-  if (hasExplicitThemeControl && !/classList\.toggle|dataset\.theme|localStorage|prefers-color-scheme/i.test(js)) {
-    issues.push("Toggle/tema visual sem implementação funcional no JavaScript.");
-  }
-  if (/<details\b|faq/i.test(html) && !/<details\b/i.test(html) && !/addEventListener\(['"]click|aria-expanded|classList\.toggle/i.test(js)) {
-    issues.push("FAQ/interação expansível sem comportamento funcional.");
-  }
-  const hasCartControl = /\b(cart|carrinho|add-to-cart|checkout)\b|<button[^>]*>[^<]*(?:comprar|adicionar ao carrinho)/i.test(html);
-  if (hasCartControl && !/cart|carrinho|addEventListener\(['"]click|quantity|total/i.test(js)) {
-    issues.push("Carrinho ou ações de compra visíveis sem lógica básica no JavaScript.");
-  }
-
-  const request = String(job.message || project.name || "").toLowerCase();
-  const requestTerms = request
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .split(/[^a-z0-9]+/)
-    .filter((term) => term.length >= 5 && !["quero", "criar", "fazer", "site", "para", "com", "uma", "como", "pagina", "landing"].includes(term))
-    .slice(0, 10);
-  const normalizedCombined = combined.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-  const matchedTerms = requestTerms.filter((term) => normalizedCombined.includes(term)).length;
-  if (requestTerms.length >= 3 && matchedTerms < Math.min(3, requestTerms.length)) {
-    issues.push("Entrega não reflete termos específicos suficientes do pedido original.");
-  }
-
-  if (/portfolio|portfólio/.test(request)) {
-    const portfolioSignals = ["projeto", "case", "portfolio", "portfólio", "designer", "contato", "serviço"];
-    const found = portfolioSignals.filter((signal) => combined.toLowerCase().includes(signal)).length;
-    if (found < 4) issues.push("Portfólio não tem seções/conteúdo suficientes de designer, cases, serviços e contato.");
-  }
-  if (/saas|dashboard|app|sistema|crm|billing|pricing/.test(request)) {
-    const appSignals = ["dashboard", "onboarding", "settings", "configura", "pricing", "plano", "billing", "login"];
-    const found = appSignals.filter((signal) => combined.toLowerCase().includes(signal)).length;
-    if (found < 4) issues.push("SaaS/app não possui telas e fluxos suficientes além de uma home.");
-  }
-
-  const blockingIssues = issues.filter((issue) => /Arquivo obrigatório|padrão inseguro|possível segredo|Conteúdo visível insuficiente|Poucas seções|Poucos títulos|Preview parece scaffold genérico|placeholders ou conteúdo incompleto/i.test(issue));
-  return {
-    passed: blockingIssues.length === 0,
-    score: Math.max(55, 100 - issues.length * 10),
-    summary: blockingIssues.length === 0 ? "Quality gates bloqueantes aprovados; apontamentos restantes são melhorias." : "Quality gates bloqueantes reprovaram a geração.",
-    issues,
-    blocking_issues: blockingIssues,
+  const requirements = projectTypeRequirements(project, job);
+  const minimums = requirements.minimums || {};
+  const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? html;
+  const main = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1] ?? "";
+  const firstViewport = body.slice(0, 4500);
+  const productMatches = html.match(/(?:class|data-[\w-]+|id)=["'][^"']*(?:product|produto|item-card|card-produto)[^"']*["']|R\$\s*\d|comprar|adicionar ao carrinho/gi) || [];
+  const caseMatches = html.match(/(?:case|projeto|portfolio|portfólio)[\s\S]{0,140}?(?:<article|<li|<div|<h3)|(?:class|id)=["'][^"']*(?:case|project|projeto|portfolio)[^"']*["']/gi) || [];
+  const appBlockMatches = html.match(/dashboard|onboarding|login|settings|configuraç|billing|pricing|métrica|metric|kanban|pipeline/gi) || [];
+  const metrics = {
+    htmlChars: html.length,
+    cssChars: css.length,
+    jsChars: js.length,
+    visibleTextChars: visibleText.length,
+    mainTextChars: visibleTextFromHtml(main).length,
+    sections: (html.match(/<section\b/gi) || []).length,
+    headings: (html.match(/<h[1-3]\b/gi) || []).length,
+    buttons: (html.match(/<button\b|class=["'][^"']*button|href=["']#/gi) || []).length,
+    cards: (html.match(/<article\b|class=["'][^"']*(?:card|item|produto|product|case|projeto|price|plan|feature)[^"']*["']/gi) || []).length,
+    products: productMatches.length,
+    cases: caseMatches.length,
+    appBlocks: new Set(appBlockMatches.map((match) => normalizeText(match))).size,
+    forms: (html.match(/<form\b/gi) || []).length,
+    cssRules: (css.match(/\{[^}]*\}/g) || []).length,
+    hasMain: /<main\b/i.test(html),
+    hasHeroH1: /<h1\b/i.test(firstViewport),
+    hasHeroCta: /<a\b[^>]*href=["']#|<button\b/i.test(firstViewport),
+    hasHeroSubtitle: /<p\b/i.test(firstViewport),
   };
+  const blocking = [];
+  const warnings = [];
+  const repairInstructions = [];
+  const addBlocking = (issue, instruction = issue) => { blocking.push(issue); repairInstructions.push(instruction); };
+  const addWarning = (issue, instruction = issue) => { warnings.push(issue); repairInstructions.push(instruction); };
+
+  for (const path of ["index.html", "styles.css", "script.js"]) if (!byPath[path]?.trim()) addBlocking(`Arquivo obrigatório ausente ou vazio: ${path}`, `Retorne ${path} completo e coerente com os outros arquivos.`);
+  if (!metrics.hasMain) addBlocking("HTML sem tag <main> semântica.", "Adicione <main> envolvendo o conteúdo principal com hero e seções reais.");
+  if (visibleText.length < Math.max(900, minimums.visibleText - 400)) addBlocking("Body sem conteúdo real suficiente.", `Expanda a copy visível para pelo menos ${minimums.visibleText} caracteres com conteúdo específico do briefing.`);
+  if (metrics.sections < Math.max(4, minimums.sections - 2)) addBlocking("Poucas seções estruturais para uma entrega completa.", `Crie pelo menos ${minimums.sections} seções reais: ${requirements.required_sections.join(", ")}.`);
+  if (metrics.cssRules < Math.max(18, minimums.cssRules - 10)) addBlocking("CSS sem regras suficientes para layout básico premium.", "Expanda o CSS com layout, grids, cards, estados, responsividade e primeira dobra preenchida.");
+  try { new Function(js); } catch (error) { addBlocking(`JavaScript com erro de sintaxe: ${error.message}`, "Corrija a sintaxe do script.js mantendo todas as interações funcionando."); }
+  if (!metrics.hasHeroH1 || !metrics.hasHeroCta || !metrics.hasHeroSubtitle) addBlocking("Hero acima da dobra incompleto.", "No início do body/main, inclua hero com h1, subtítulo, CTA e apoio visual/card sem área branca dominante.");
+  if (/ForzaAI\s*<\/h1>|Home\s*<\/button>|Templates\s*<\/button>|Analytics\s*<\/button>|Configurações\s*<\/button>/i.test(html)) addBlocking("Preview parece scaffold genérico do editor, não o site solicitado.", "Substitua qualquer scaffold por conteúdo específico do projeto do usuário.");
+  if (/TODO|lorem ipsum|coming soon|em breve/i.test(combined.replace(/\splaceholder=("[^"]*"|'[^']*')/gi, ""))) addBlocking("Arquivos contêm placeholder ou conteúdo incompleto.", "Troque TODO/lorem/em breve por conteúdo final específico e seções completas.");
+  if (/eval\s*\(|service[_-]?role|api[_-]?key\s*=|sk-[a-z0-9]{20,}/i.test(combined)) addBlocking("Arquivos contêm padrão inseguro ou possível segredo.", "Remova eval, chaves, service role, SQL sensível e qualquer segredo do frontend.");
+
+  if (requirements.type === "ecommerce") {
+    if (metrics.products < minimums.products) addBlocking("E-commerce com catálogo inicial insuficiente.", `Crie pelo menos ${minimums.products} produtos visíveis com nome, preço, categoria, visual e botão comprar.`);
+    if (/0\s*(produtos|itens)|carrinho vazio/i.test(firstViewport) && metrics.products < minimums.products) addBlocking("E-commerce mostra estado vazio antes do catálogo.", "A vitrine inicial deve exibir produtos reais/mockados; estado vazio só pode aparecer dentro do carrinho antes de adicionar item.");
+    if (!/cart|carrinho|total|remove|remover|quantity|quantidade/i.test(js)) addWarning("Carrinho precisa de lógica completa no script.js.", "Implemente adicionar/remover item, atualizar quantidade/contador e total do carrinho.");
+  }
+  if (requirements.type === "portfolio" && metrics.cases < minimums.cases) addBlocking("Portfólio com poucos projetos/cases visíveis.", `Inclua pelo menos ${minimums.cases} cases/projetos com contexto, papel, entrega e resultado.`);
+  if (requirements.type === "saas" && metrics.appBlocks < minimums.appBlocks) addBlocking("SaaS/app sem blocos suficientes de produto/tela/métrica.", "Inclua dashboard, onboarding/login visual, pricing e settings/billing com dados mockados coerentes.");
+
+  if (metrics.headings < minimums.headings) addWarning("Poucos headings para orientar a página.", `Use pelo menos ${minimums.headings} títulos h1-h3 distribuídos nas seções.`);
+  if (metrics.cards < minimums.cards) addWarning("Poucos cards/list items para densidade visual.", `Inclua pelo menos ${minimums.cards} cards/itens relevantes ao tipo ${requirements.type}.`);
+  if (!/@media\b/i.test(css)) addWarning("CSS sem media query responsiva.", "Adicione media queries para tablet/mobile.");
+  if (/<form\b/i.test(html) && !/addEventListener\(['"]submit|onsubmit|checkValidity|preventDefault/i.test(js)) addWarning("Formulário visível sem validação/feedback.", "Implemente submit com preventDefault, validação e mensagem de sucesso/erro.");
+  const wantsTheme = /claro|escuro|dark|light|tema|theme/i.test(`${job.message || ""} ${html}`);
+  if (wantsTheme && !/dataset\.theme|localStorage|prefers-color-scheme|classList\.toggle/i.test(js)) addWarning("Tema claro/escuro sem implementação funcional.", "Adicione botão no header, variáveis CSS, document.documentElement.dataset.theme e persistência em localStorage.");
+
+  const issues = [...blocking, ...warnings];
+  return { passed: blocking.length === 0, score: Math.max(55, 100 - blocking.length * 16 - warnings.length * 4), summary: blocking.length === 0 ? "Estrutura mínima aprovada; warnings registrados para melhoria." : "Estrutura mínima incompleta; reparo por IA recomendado antes de salvar.", type: requirements.type, metrics, blocking, warnings, repairInstructions: [...new Set(repairInstructions)].slice(0, 12), issues, blocking_issues: blocking };
+}
+
+function deterministicQualityReport(project, job, files) {
+  return analyzeGeneratedSite(project, job, files);
 }
 
 async function validateFiles(supabase, model, run, job, project, plans, files) {
@@ -749,11 +801,16 @@ async function validateFiles(supabase, model, run, job, project, plans, files) {
     deterministic_gates: gateReport,
     model_review: report,
     issues: gateReport.issues || [],
+    warnings: gateReport.warnings || [],
+    blocking: gateReport.blocking || gateReport.blocking_issues || [],
   };
   finalReport.score = Math.max(70, gateReport.score);
   finalReport.passed = true;
-  finalReport.blockingDisabled = true;
-  finalReport.summary = `Validação registrada como consultiva (${modelIssues.length} apontamentos da IA; ${(gateReport.issues || []).length} apontamentos automáticos).`;
+  finalReport.blockingRemaining = (gateReport.blocking || gateReport.blocking_issues || []).length > 0;
+  finalReport.objectiveStructuralValidation = true;
+  finalReport.summary = finalReport.blockingRemaining
+    ? `Site salvo com reparo de IA aplicado, mas ainda restaram ${(gateReport.blocking || gateReport.blocking_issues || []).length} lacunas estruturais registradas para transparência.`
+    : `Validação estrutural aprovada com ${(gateReport.warnings || []).length} warning(s) consultivo(s) e ${modelIssues.length} apontamento(s) da IA.`;
   await saveArtifact(supabase, run.id, "validation_report", finalReport);
   return finalReport;
 }
@@ -855,10 +912,22 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
     files = await synthesizeFinalFiles(supabase, model, run, job, project, plans, files, skillsContext);
     if (!currentFiles?.length && tasks[1]) await updateTask(supabase, tasks[1].id, { status: "completed", completed_at: new Date().toISOString() });
     if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "running" });
-    const firstGateReport = deterministicQualityReport(project, job, files);
-    await saveArtifact(supabase, run.id, "quality_gate_report", { blockingDisabled: true, report: firstGateReport });
-    if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "completed", completed_at: new Date().toISOString() });
-    if (!currentFiles?.length && tasks[3]) await updateTask(supabase, tasks[3].id, { status: "completed", completed_at: new Date().toISOString() });
+    let structuralReport = analyzeGeneratedSite(project, job, files);
+    await saveArtifact(supabase, run.id, "structural_analysis", { attempt: 1, report: structuralReport });
+    if (structuralReport.blocking.length) {
+      await updateJob(supabase, job.id, { stage: "Forza Engine: reparando lacunas objetivas…" });
+      files = await repairFilesForQuality(supabase, model, run, job, project, plans, files, structuralReport);
+      structuralReport = analyzeGeneratedSite(project, job, files);
+      await saveArtifact(supabase, run.id, "structural_analysis", { attempt: 2, report: structuralReport });
+    }
+    if (structuralReport.blocking.length && structuralReport.blocking.some((issue) => /Arquivo obrigatório|Body sem conteúdo real|catálogo inicial insuficiente|poucos projetos|sem blocos suficientes|Hero acima da dobra/i.test(issue))) {
+      files = await repairFilesForQuality(supabase, model, run, job, project, plans, files, structuralReport);
+      structuralReport = analyzeGeneratedSite(project, job, files);
+      await saveArtifact(supabase, run.id, "structural_analysis", { attempt: 3, report: structuralReport });
+    }
+    await saveArtifact(supabase, run.id, "quality_gate_report", { blockingDisabled: false, objectiveOnly: true, report: structuralReport });
+    if (!currentFiles?.length && tasks[2]) await updateTask(supabase, tasks[2].id, { status: "completed", output: { warnings: structuralReport.warnings, blocking: structuralReport.blocking }, completed_at: new Date().toISOString() });
+    if (!currentFiles?.length && tasks[3]) await updateTask(supabase, tasks[3].id, { status: "completed", output: { repaired: structuralReport.blocking.length === 0, metrics: structuralReport.metrics }, completed_at: new Date().toISOString() });
     const validationReport = await validateFiles(supabase, model, run, job, project, plans, files);
     await setPhase(supabase, job.id, run.id, "finalize", "Forza Engine: salvando versão final…");
     await saveFiles(supabase, job.project_id, files);

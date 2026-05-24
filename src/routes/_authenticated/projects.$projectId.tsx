@@ -662,8 +662,10 @@ document.addEventListener('click', function(event) {
       if (!/<base\b/i.test(doc)) doc = doc.replace(/<head>/i, `<head><base href="about:srcdoc">`);
       if (css && !/<style/i.test(doc))
         doc = doc.replace(/<\/head>/i, `<style>${css}</style></head>`);
-      if (js && !/<script/i.test(doc))
-        doc = doc.replace(/<\/body>/i, `<script>${js}<\/script></body>`);
+      const inlineScript = js ? `<script>${js}<\/script>` : "";
+      doc = doc.replace(/<script\b[^>]*src=["'][^"']*script\.js[^"']*["'][^>]*>\s*<\/script>/gi, "");
+      if (inlineScript)
+        doc = doc.replace(/<\/body>/i, `${inlineScript}</body>`);
       return doc.replace(/<\/body>/i, `${previewGuard}</body>`);
     }
     return `<!doctype html><html><head><base href="about:srcdoc"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body>${html}<script>${js}<\/script>${previewGuard}</body></html>`;
