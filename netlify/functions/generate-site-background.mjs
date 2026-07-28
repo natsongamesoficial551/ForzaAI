@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { Agent } from "undici";
+import { applyRTK, EMBEDDED_SKILLS, getEnrichedContract } from "./engine-modules.mjs";
 
 const AI_REQUEST_TIMEOUT_MS = 7_200_000;
 const AI_FETCH_DISPATCHER = new Agent({
@@ -7,7 +8,63 @@ const AI_FETCH_DISPATCHER = new Agent({
   headersTimeout: AI_REQUEST_TIMEOUT_MS,
   bodyTimeout: AI_REQUEST_TIMEOUT_MS,
 });
-const MODEL_IDS = new Set(["forza-1-flash", "forza-1-pro", "forza-2-pro", "forza-2-5-thinking"]);
+const MODEL_IDS = new Set([
+  "forza-1-flash",
+  "forza-1-pro",
+  "forza-2-pro",
+  "forza-2-5-thinking",
+  "forza-nim-minimax",
+  "forza-nim-nemotron",
+  "forza-openrouter-deepseek-pro",
+  "forza-openrouter-free",
+  "forza-openrouter-glm",
+  "forza-openrouter-qwen",
+  "forza-openrouter-claude-fable",
+  "forza-openrouter-claude-sonnet",
+  "forza-opencode-free-flash",
+]);
+
+const PROVIDER_CONTEXT_WINDOWS = {
+  deepseek: 128_000,
+  "nvidia-nim": 128_000,
+  openrouter: 200_000,
+  "opencode-free": 64_000,
+  "openai-compatible": 64_000,
+};
+
+const ENV_KEY_FOR_PROVIDER = {
+  deepseek: ["DEEPSEEK_API_KEY"],
+  "nvidia-nim": ["NVIDIA_NIM_API_KEY", "NVIDIA_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
+  "opencode-free": ["OPENCODE_API_KEY"],
+  "openai-compatible": [],
+};
+
+const PROVIDER_ENDPOINT_HINTS = {
+  deepseek: /api\.deepseek\.com/,
+  "nvidia-nim": /integrate\.api\.nvidia\.com/,
+  openrouter: /openrouter\.ai\/api\/v1/,
+  "opencode-free": /opencode\.ai\/api\/v1/,
+  "openai-compatible": null,
+};
+
+const normalizeProviderKind = (raw, endpoint) => {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "deepseek" || /api\.deepseek\.com/.test(endpoint)) return "deepseek";
+  if (value === "nvidia-nim" || value === "nvidia" || /integrate\.api\.nvidia\.com/.test(endpoint)) return "nvidia-nim";
+  if (value === "openrouter" || /openrouter\.ai\/api\/v1/.test(endpoint)) return "openrouter";
+  if (value === "opencode-free" || value === "opencode" || /opencode\.ai\/api\/v1/.test(endpoint)) return "opencode-free";
+  return "openai-compatible";
+};
+
+const envKeyForProvider = (provider) => {
+  const keys = ENV_KEY_FOR_PROVIDER[provider] || [];
+  for (const key of keys) {
+    const value = process.env[key];
+    if (value) return value;
+  }
+  return null;
+};
 
 const json = (status, body) => new Response(JSON.stringify(body), {
   status,
@@ -169,7 +226,7 @@ function deliveryContract(project, job, plans) {
   const productPlan = plans?.productPlan ?? {};
   const technicalPlan = plans?.technicalPlan ?? {};
   const typeRequirements = projectTypeRequirements(project, job);
-  return {
+  const base = {
     original_request: request,
     project_name: project.name,
     site_type: project.site_type,
@@ -201,6 +258,7 @@ function deliveryContract(project, job, plans) {
       "Evite min-height excessivo em seções sem conteúdo; nenhuma seção pode parecer vazia no preview."
     ],
   };
+  return getEnrichedContract(base);
 }
 
 function deterministicPremiumFiles(project, job, plans, reason = []) {
@@ -311,15 +369,24 @@ async function routeModel(supabase, modelId, hasSubscription) {
 
   if (setting) {
     if (setting.requires_subscription && !hasSubscription) throw new Error("Esse modelo é exclusivo para assinantes Pro.");
-    const provider = String(setting.provider || "").trim();
+    const provider = normalizeProviderKind(setting.provider, setting.endpoint);
     const endpoint = String(setting.endpoint || "").trim();
     if (provider === "deepseek" && !endpoint.includes("api.deepseek.com")) {
-      throw new Error("Configuração inválida: provider DeepSeek está apontando para endpoint que não é da DeepSeek. Para NVIDIA, use provider OpenAI-compatible oficial.");
+      throw new Error("Configuração inválida: provider DeepSeek está apontando para endpoint que não é da DeepSeek.");
     }
     if (provider !== "deepseek" && endpoint.includes("api.deepseek.com")) {
       throw new Error("Configuração inválida: endpoint da DeepSeek precisa usar provider DeepSeek.");
     }
-    const apiKey = setting.api_key || (provider === "deepseek" ? deepSeekKey : null);
+    if (provider === "nvidia-nim" && !endpoint.includes("integrate.api.nvidia.com")) {
+      throw new Error("Configuração inválida: Nvidia NIM precisa usar integrate.api.nvidia.com.");
+    }
+    if (provider === "openrouter" && !endpoint.includes("openrouter.ai/api/v1")) {
+      throw new Error("Configuração inválida: OpenRouter precisa usar openrouter.ai/api/v1.");
+    }
+    if (provider === "opencode-free" && !endpoint.includes("opencode.ai/api/v1")) {
+      throw new Error("Configuração inválida: OpenCode Free precisa usar opencode.ai/api/v1.");
+    }
+    const apiKey = setting.api_key || envKeyForProvider(provider) || (provider === "deepseek" ? deepSeekKey : null);
     if (!apiKey) throw new Error(`API key não configurada para ${setting.label}.`);
     return {
       id: requestedModel,
@@ -329,6 +396,7 @@ async function routeModel(supabase, modelId, hasSubscription) {
       upstreamModel: setting.upstream_model,
       apiKey,
       creditMultiplier: Number(setting.credit_multiplier || 1),
+      estimatedContextWindow: PROVIDER_CONTEXT_WINDOWS[provider] ?? 64_000,
     };
   }
 
@@ -344,6 +412,7 @@ async function routeModel(supabase, modelId, hasSubscription) {
     upstreamModel: requestedModel === "forza-2-5-thinking" ? "deepseek-reasoner" : "deepseek-chat",
     apiKey: deepSeekKey,
     creditMultiplier: requestedModel === "forza-2-5-thinking" ? 4 : 1,
+    estimatedContextWindow: PROVIDER_CONTEXT_WINDOWS.deepseek,
   };
 }
 
@@ -446,8 +515,14 @@ async function fetchJson(model, messages, fallback, context = {}) {
   }
 }
 
-function filesContext(files) {
-  return (files ?? []).map((f) => `--- ${f.path} ---\n${f.content}`).join("\n\n") || "(sem arquivos ainda)";
+function filesContext(files, rtkLimit = 8000) {
+  const joined = (files ?? []).map((f) => `--- ${f.path} ---\n${f.content}`).join("\n\n") || "(sem arquivos ainda)";
+  return applyRTK(joined, rtkLimit);
+}
+
+function buildSkillsContext(userSkills) {
+  const embeddedContext = EMBEDDED_SKILLS.map((skill) => `Embedded Skill [${skill.name}]: ${skill.prompt}`).join("\n");
+  return `${embeddedContext}\n${userSkills || ""}`;
 }
 
 async function createTask(supabase, runId, position, phase, title, description, input = null) {
@@ -490,11 +565,11 @@ async function buildPlans(supabase, model, run, project, job, currentFiles, skil
   const productPlan = await fetchJson(model, [
     {
       role: "system",
-      content: "Você é o estrategista de produto sênior do ForzaAI. Transforme o briefing em um plano de SaaS/site completo, não apenas uma home. Pense como Lovable/Claude Code: produto, usuários, fluxos, páginas, estados vazios, monetização, onboarding e diferenciais. Responda somente JSON com: summary, audience, positioning, pages, user_flows, features, entities, conversion_goals, quality_criteria, edge_cases, security_notes.",
+      content: "Você é o estrategista de produto sênior do ForzaAI. Transforme o briefing em um plano de SaaS/site completo, não apenas uma home. Pense como Lovable/Claude Code: produto, usuários, fluxos, páginas, estados vazios, monetização, onboarding e diferenciais. Aplique rigorosamente os padrões das Embedded Skills (Visual Hierarchy, Copy de Conversão). Responda somente JSON com: summary, audience, positioning, pages, user_flows, features, entities, conversion_goals, quality_criteria, edge_cases, security_notes.",
     },
     {
       role: "user",
-      content: `Projeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}\nPedido: ${job.message}\nSkills:\n${skillsContext || "—"}\nArquivos atuais:\n${filesContext(currentFiles)}`,
+      content: `Projeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}\nPedido: ${job.message}\nSkills:\n${buildSkillsContext(skillsContext)}\nArquivos atuais:\n${filesContext(currentFiles)}`,
     },
   ], {
     summary: job.message,
@@ -586,7 +661,7 @@ async function generateInitialFiles(supabase, model, run, job, project, plans, s
       },
       {
         role: "user",
-        content: `Contrato obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${skillsContext || "—"}\nPlanos:\n${JSON.stringify(plans)}`,
+        content: `Contrato de entrega obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${buildSkillsContext(skillsContext)}\n\nPlanos:\n${JSON.stringify(plans)}`,
       },
     ],
   }, { supabase, jobId: job.id });
@@ -617,7 +692,7 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
           },
           {
             role: "user",
-            content: `Contrato de entrega obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${skillsContext || "—"}\nPlanos:\n${JSON.stringify(plans)}\n\nTask atual: ${task.title}\n${task.description}\n\nArquivos atuais de trabalho:\n${filesContext(workingFiles)}\n\nAntes de responder, confira se os três arquivos finais ainda cumprem o pedido original inteiro e todos os critérios do contrato.`,
+            content: `Contrato de entrega obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${buildSkillsContext(skillsContext)}\n\nPlanos:\n${JSON.stringify(plans)}\n\nTask atual: ${task.title}\n${task.description}\n\nArquivos atuais de trabalho:\n${filesContext(workingFiles)}\n\nAntes de responder, confira se os três arquivos finais ainda cumprem o pedido original inteiro e todos os critérios do contrato.`,
           },
         ],
       }, { supabase, jobId: job.id });

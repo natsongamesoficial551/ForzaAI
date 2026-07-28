@@ -8,7 +8,29 @@ async function ensureAdmin(supabase: any, userId: string) {
   if (error || !data) throw new Error("Forbidden");
 }
 
-const ForzaModelSchema = z.enum(["forza-1-flash", "forza-1-pro", "forza-2-pro", "forza-2-5-thinking"]);
+const ForzaModelSchema = z.enum([
+  "forza-1-flash",
+  "forza-1-pro",
+  "forza-2-pro",
+  "forza-2-5-thinking",
+  "forza-nim-minimax",
+  "forza-nim-nemotron",
+  "forza-openrouter-deepseek-pro",
+  "forza-openrouter-free",
+  "forza-openrouter-glm",
+  "forza-openrouter-qwen",
+  "forza-openrouter-claude-fable",
+  "forza-openrouter-claude-sonnet",
+  "forza-opencode-free-flash",
+]);
+
+const AiProviderKindSchema = z.enum([
+  "deepseek",
+  "nvidia-nim",
+  "openrouter",
+  "opencode-free",
+  "openai-compatible",
+]);
 
 const AiProviderSettingSchema = z.object({
   id: z.string().uuid().optional(),
@@ -136,10 +158,23 @@ export const saveAiProviderSetting = createServerFn({ method: "POST" })
     const provider = data.provider.trim();
     const endpoint = data.endpoint.trim();
     if (provider === "deepseek" && !endpoint.includes("api.deepseek.com")) {
-      throw new Error("Provider DeepSeek precisa usar endpoint da DeepSeek. Para NVIDIA, selecione OpenAI-compatible oficial.");
+      throw new Error("Provider DeepSeek precisa usar endpoint da DeepSeek. Para NVIDIA, OpenRouter ou OpenCode Free, selecione o provider correspondente.");
     }
     if (provider !== "deepseek" && endpoint.includes("api.deepseek.com")) {
       throw new Error("Endpoint da DeepSeek precisa usar provider DeepSeek.");
+    }
+    if (provider === "nvidia-nim" && !endpoint.includes("integrate.api.nvidia.com")) {
+      throw new Error("Provider Nvidia NIM precisa usar https://integrate.api.nvidia.com/v1/chat/completions.");
+    }
+    if (provider === "openrouter" && !endpoint.includes("openrouter.ai/api/v1")) {
+      throw new Error("Provider OpenRouter precisa usar https://openrouter.ai/api/v1/chat/completions.");
+    }
+    if (provider === "opencode-free" && !endpoint.includes("opencode.ai/api/v1")) {
+      throw new Error("Provider OpenCode Free precisa usar https://opencode.ai/api/v1/chat/completions.");
+    }
+    const validated = AiProviderKindSchema.safeParse(provider);
+    if (!validated.success) {
+      throw new Error("Provider inválido. Use deepseek, nvidia-nim, openrouter, opencode-free ou openai-compatible.");
     }
 
     const payload: Record<string, unknown> = {
