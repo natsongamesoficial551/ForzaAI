@@ -460,7 +460,9 @@ function normalizeAiRequestBody(model: RoutedAiModel, body: Record<string, unkno
 function resolveEndpoint(baseUrl: string): string {
   const url = String(baseUrl || "").replace(/\/+$/, "");
   if (/\/chat\/completions$/i.test(url)) return url;
-  return `${url}/chat/completions`;
+  if (/\/v1$/i.test(url)) return `${url}/chat/completions`;
+  if (/\/(v1|api|completions)/i.test(url)) return `${url}/chat/completions`;
+  return `${url}/v1/chat/completions`;
 }
 
 function describeFetchFailure(error: unknown) {
