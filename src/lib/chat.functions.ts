@@ -454,9 +454,13 @@ const AI_REQUEST_TIMEOUT_MS = 240_000;
 
 function normalizeAiRequestBody(model: RoutedAiModel, body: Record<string, unknown>) {
   const requestBody = { ...body, model: model.upstreamModel };
-  const isOpenAiGpt5 = model.endpoint.includes("api.openai.com") && /^gpt-5/i.test(model.upstreamModel);
-  if (isOpenAiGpt5) delete requestBody.temperature;
   return requestBody;
+}
+
+function resolveEndpoint(baseUrl: string): string {
+  const url = String(baseUrl || "").replace(/\/+$/, "");
+  if (/\/chat\/completions$/i.test(url)) return url;
+  return `${url}/chat/completions`;
 }
 
 function describeFetchFailure(error: unknown) {
@@ -479,7 +483,8 @@ async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unkn
   });
 
   try {
-    upstream = await fetch(model.endpoint, {
+    const endpointUrl = resolveEndpoint(model.endpoint);
+    upstream = await fetch(endpointUrl, {
       method: "POST",
       headers: aiHeaders(model),
       signal: controller.signal,
@@ -496,7 +501,7 @@ async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unkn
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("A IA demorou demais para responder. Em produção, requests longas podem ser encerradas pela hospedagem; tente novamente ou escolha um modelo mais rápido.");
     }
-    throw new Error(`Falha de conexão com o provedor ${model.label} em ${model.endpoint}: ${describeFetchFailure(error)}. Confira endpoint, rede da hospedagem e se o modelo upstream "${model.upstreamModel}" existe na API.`);
+    throw new Error(`Falha de conexão com o provedor ${model.label} em ${resolveEndpoint(model.endpoint)}: ${describeFetchFailure(error)}. Confira endpoint, rede da hospedagem e se o modelo upstream "${model.upstreamModel}" existe na API.`);
   } finally {
     clearTimeout(timeout);
   }

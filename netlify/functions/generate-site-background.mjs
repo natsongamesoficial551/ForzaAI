@@ -332,11 +332,13 @@ async function routeModel(supabase, modelId) {
 
 function normalizeAiRequestBody(model, body) {
   const requestBody = { ...body, model: model.upstreamModel };
-  const isOpenAiGpt5 =
-    String(model.endpoint || "").includes("api.openai.com") &&
-    /^gpt-5/i.test(String(model.upstreamModel || ""));
-  if (isOpenAiGpt5) delete requestBody.temperature;
   return requestBody;
+}
+
+function resolveEndpoint(baseUrl) {
+  const url = String(baseUrl || "").replace(/\/+$/, "");
+  if (/\/chat\/completions$/i.test(url)) return url;
+  return `${url}/chat/completions`;
 }
 
 function describeFetchFailure(error) {
@@ -366,7 +368,8 @@ async function fetchAiText(model, body, context = {}) {
     const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
     let response;
     try {
-      response = await fetch(model.endpoint, {
+      const endpointUrl = resolveEndpoint(model.endpoint);
+      response = await fetch(endpointUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${model.apiKey}`,
@@ -380,7 +383,7 @@ async function fetchAiText(model, body, context = {}) {
       if (error?.name === "AbortError") {
         throw new Error(`O provedor ${model.label} demorou mais de ${Math.round(AI_REQUEST_TIMEOUT_MS / 1000)}s para responder. Esse modelo pode estar congestionado; use um modelo menor/mais rápido para gerar site completo.`);
       }
-      throw new Error(`Falha de conexão com o provedor ${model.label} em ${model.endpoint}: ${describeFetchFailure(error)}. Confira endpoint, rede da hospedagem e se o modelo upstream "${model.upstreamModel}" existe na API.`);
+      throw new Error(`Falha de conexão com o provedor ${model.label} em ${resolveEndpoint(model.endpoint)}: ${describeFetchFailure(error)}. Confira endpoint, rede da hospedagem e se o modelo upstream "${model.upstreamModel}" existe na API.`);
     } finally {
       clearTimeout(timeout);
     }
@@ -401,6 +404,7 @@ async function fetchAiText(model, body, context = {}) {
       if (response.status === 402) throw new Error(`Créditos esgotados no provedor ${model.label}.`);
       if (response.status === 400) throw new Error(`Configuração inválida no provedor ${model.label}: confira endpoint, parâmetros e se o modelo upstream "${model.upstreamModel}" existe. Detalhe: ${text.slice(0, 240)}`);
       if (response.status === 404) throw new Error(`Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`);
+      if (response.status === 405) throw new Error(`Método não permitido no provedor ${model.label} (405). O endpoint precisa terminar com /chat/completions. Configure assim: http://10.42.0.85:20128/v1 (o motor completa o caminho automaticamente).`);
       if (response.status === 429) throw new Error(`Limite do provedor ${model.label} atingido mesmo após ${maxAttempts - 1} tentativas. Aguarde alguns minutos ou use outro modelo.`);
       if (response.status === 502 || response.status === 503 || response.status === 504 || /bad gateway|gateway timeout|<html/i.test(text)) throw new Error(`O provedor ${model.label} retornou gateway/instabilidade (${response.status}) mesmo após ${maxAttempts - 1} tentativas. Isso costuma ser falha upstream ou congestionamento do modelo "${model.upstreamModel}"; tente novamente ou use um modelo menor. Detalhe: ${text.replace(/\s+/g, " ").slice(0, 180)}`);
       throw new Error(`Falha no provedor ${model.label} (${response.status}): ${text.slice(0, 240)}`);
