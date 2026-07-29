@@ -445,6 +445,26 @@ function buildSkillsContext(userSkills) {
   return `${embeddedContext}\n${userSkills || ""}`;
 }
 
+function isGatewayError(message) {
+  return /502|504|gateway|timeout|congestionado|instabilidade|não respondeu/i.test(String(message));
+}
+
+async function continuaRetry(model, workingFiles, supabase, jobId, extraContext = "") {
+  const continuaMsg = `Continua de onde parou. Complete os três arquivos.\n\n${extraContext}\n\nArquivos parciais atuais:\n${filesContext(workingFiles)}\n\nRetorne SOMENTE:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo`;
+  await updateJob(supabase, jobId, { stage: "Forza Engine: retomando de onde parou (Continua)…" });
+  const content = await fetchAiText(model, {
+    stream: false,
+    temperature: 0.1,
+    messages: [
+      { role: "system", content: "Você é o finalizador do ForzaAI. Continue exatamente de onde parou. Retorne os três arquivos COMPLETOS. Não resuma, não corte." },
+      { role: "user", content: continuaMsg },
+    ],
+  }, { supabase, jobId });
+  const parsed = normalizeGeneratedFiles(content, "");
+  if (!parsed) throw new Error("Continua não retornou arquivos válidos.");
+  return parsed;
+}
+
 async function createTask(supabase, runId, position, phase, title, description, input = null) {
   const { data, error } = await supabase
     .from("engine_tasks")
@@ -571,20 +591,38 @@ async function generateInitialFiles(supabase, model, run, job, project, plans, s
   const generationTask = initialTasks[0];
   if (generationTask) await updateTask(supabase, generationTask.id, { status: "running" });
   const contract = deliveryContract(project, job, plans);
-  const content = await fetchAiText(model, {
-    stream: false,
-    temperature: 0.1,
-    messages: [
-      {
-        role: "system",
-        content: "Você é o gerador principal do ForzaAI. Gere a entrega completa em UMA resposta, sem dividir em etapas. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: página completa e publicável, específica do briefing, com conteúdo real. Não deixe hero/body vazios. A primeira viewport precisa mostrar hero completo com título grande, subtítulo, CTA, prova/metric card e visual premium; nunca entregue header+footer com miolo branco. Inclua no mínimo 7 seções reais, 6 headings h1-h3, 1800+ caracteres de texto visível, 8+ cards/list items, CTA, FAQ e footer. CSS responsivo com @media, background visível, espaçamento equilibrado e sem min-height que gere áreas vazias. JS seguro e funcional para todos os elementos interativos visíveis: formulário, menu, tabs, filtros, carrinho, modais e FAQ quando existirem; tema claro/escuro somente se o usuário pedir explicitamente. Não use eval, innerHTML com dados variáveis, API keys, SQL sensível ou scripts remotos desconhecidos. Não repita estrutura genérica: escolha uma direção visual única baseada no briefing, com paleta, grid, hero, cards, navegação, nomes, seções e microcopy diferentes para este projeto específico.",
-      },
-      {
-        role: "user",
-        content: `Contrato de entrega obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${buildSkillsContext(skillsContext)}\n\nPlanos:\n${JSON.stringify(plans)}`,
-      },
-    ],
-  }, { supabase, jobId: job.id });
+  let content;
+  try {
+    content = await fetchAiText(model, {
+      stream: false,
+      temperature: 0.1,
+      messages: [
+        {
+          role: "system",
+          content: "Você é o gerador principal do ForzaAI. Gere a entrega completa em UMA resposta, sem dividir em etapas. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: página completa e publicável, específica do briefing, com conteúdo real. Não deixe hero/body vazios. A primeira viewport precisa mostrar hero completo com título grande, subtítulo, CTA, prova/metric card e visual premium; nunca entregue header+footer com miolo branco. Inclua no mínimo 7 seções reais, 6 headings h1-h3, 1800+ caracteres de texto visível, 8+ cards/list items, CTA, FAQ e footer. CSS responsivo com @media, background visível, espaçamento equilibrado e sem min-height que gere áreas vazias. JS seguro e funcional para todos os elementos interativos visíveis: formulário, menu, tabs, filtros, carrinho, modais e FAQ quando existirem; tema claro/escuro somente se o usuário pedir explicitamente. Não use eval, innerHTML com dados variáveis, API keys, SQL sensível ou scripts remotos desconhecidos. Não repita estrutura genérica: escolha uma direção visual única baseada no briefing, com paleta, grid, hero, cards, navegação, nomes, seções e microcopy diferentes para este projeto específico.",
+        },
+        {
+          role: "user",
+          content: `Contrato de entrega obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${buildSkillsContext(skillsContext)}\n\nPlanos:\n${JSON.stringify(plans)}`,
+        },
+      ],
+    }, { supabase, jobId: job.id });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isGatewayError(message)) {
+      await updateJob(supabase, job.id, { stage: "Forza Engine: gerando novamente com Continua…" });
+      content = await fetchAiText(model, {
+        stream: false,
+        temperature: 0.1,
+        messages: [
+          { role: "system", content: "Gere um site completo. Retorne SOMENTE:\n=== index.html ===\n=== styles.css ===\n=== script.js ===" },
+          { role: "user", content: `Projeto: ${project.name}\nPedido: ${job.message}\nGere o site completo.` },
+        ],
+      }, { supabase, jobId: job.id });
+    } else {
+      throw error;
+    }
+  }
   await saveArtifact(supabase, run.id, "model_raw_output", { initialFullGeneration: true, content: content.slice(0, 120_000) });
   const parsed = normalizeGeneratedFiles(content, project.name);
   if (!parsed) throw new Error("A IA não retornou os três arquivos completos no formato exigido.");
@@ -620,6 +658,19 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
       const message = error instanceof Error ? error.message : String(error);
       await updateTask(supabase, task.id, { status: "failed", error: message });
       await saveArtifact(supabase, run.id, "model_raw_output", { taskId: task.id, title: task.title, failed: true, error: message });
+      if (workingFiles.length && isGatewayError(message)) {
+        await updateJob(supabase, job.id, { stage: `Forza Engine: gateway na task, tentando Continua…` });
+        try {
+          const continued = await continuaRetry(model, workingFiles, supabase, job.id, `Task original: ${task.title}\n${task.description}`);
+          workingFiles = continued;
+          await updateTask(supabase, task.id, { status: "completed", output: { files: continued.map((f) => ({ path: f.path, chars: f.content.length })), continua: true }, completed_at: new Date().toISOString() });
+          continue;
+        } catch (continuaError) {
+          const cm = continuaError instanceof Error ? continuaError.message : String(continuaError);
+          await updateJob(supabase, job.id, { stage: `Forza Engine: continua também falhou: ${cm.slice(0, 120)}` });
+          break;
+        }
+      }
       if (workingFiles.length) break;
       throw new Error(`A IA não conseguiu gerar arquivos iniciais válidos: ${message}`);
     }
@@ -644,20 +695,32 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
 async function synthesizeFinalFiles(supabase, model, run, job, project, plans, files, skillsContext) {
   await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: consolidando entrega final…");
   const contract = deliveryContract(project, job, plans);
-  const content = await fetchAiText(model, {
-    stream: false,
-    temperature: 0.1,
-    messages: [
-      {
-        role: "system",
-        content: "Você é o finalizador principal do ForzaAI. Releia o pedido original, contrato, planos e arquivos atuais. Produza uma versão final coesa e premium que preserve o escopo inteiro e corrija lacunas antes da validação. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: produto/site completo, bonito, específico do briefing, responsivo, acessível, com copy BR, sem placeholders e sem segredos. Antes de responder, verifique mentalmente se o preview inicial não fica branco: acima da dobra deve existir hero com conteúdo, CTA, visual/card e densidade visual suficiente. Todo elemento interativo visível precisa funcionar no script.js com comportamento seguro e feedback claro. Não adicione toggle claro/escuro, ícone de lua/sol ou lógica de tema se isso não estiver explicitamente no pedido. Evite seções com min-height exagerado, espaços vazios gigantes, header sobrepondo conteúdo, texto colado ou títulos cortados; use scroll-margin-top nas âncoras e line-height legível. Antes de responder, compare mentalmente com uma landing genérica: se a estrutura poderia servir para qualquer cliente, personalize mais o layout, copy, seções e componentes para este briefing.",
-      },
-      {
-        role: "user",
-        content: `Contrato de entrega obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${skillsContext || "—"}\nPlanos:\n${JSON.stringify(plans)}\n\nArquivos atuais:\n${filesContext(files)}`,
-      },
-    ],
-  }, { supabase, jobId: job.id });
+  let content;
+  try {
+    content = await fetchAiText(model, {
+      stream: false,
+      temperature: 0.1,
+      messages: [
+        {
+          role: "system",
+          content: "Você é o finalizador principal do ForzaAI. Releia o pedido original, contrato, planos e arquivos atuais. Produza uma versão final coesa e premium que preserve o escopo inteiro e corrija lacunas antes da validação. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: produto/site completo, bonito, específico do briefing, responsivo, acessível, com copy BR, sem placeholders e sem segredos. Antes de responder, verifique mentalmente se o preview inicial não fica branco: acima da dobra deve existir hero com conteúdo, CTA, visual/card e densidade visual suficiente. Todo elemento interativo visível precisa funcionar no script.js com comportamento seguro e feedback claro. Não adicione toggle claro/escuro, ícone de lua/sol ou lógica de tema se isso não estiver explicitamente no pedido. Evite seções com min-height exagerado, espaços vazios gigantes, header sobrepondo conteúdo, texto colado ou títulos cortados; use scroll-margin-top nas âncoras e line-height legível. Antes de responder, compare mentalmente com uma landing genérica: se a estrutura poderia servir para qualquer cliente, personalize mais o layout, copy, seções e componentes para este briefing.",
+        },
+        {
+          role: "user",
+          content: `Contrato de entrega obrigatório:\n${JSON.stringify(contract)}\n\nProjeto: ${project.name}\nPedido original: ${job.message}\nSkills:\n${skillsContext || "—"}\nPlanos:\n${JSON.stringify(plans)}\n\nArquivos atuais:\n${filesContext(files)}`,
+        },
+      ],
+    }, { supabase, jobId: job.id });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isGatewayError(message) && files?.length) {
+      await updateJob(supabase, job.id, { stage: "Forza Engine: finalizando com Continua…" });
+      const continued = await continuaRetry(model, files, supabase, job.id, "Finalize e complete o site.");
+      await saveArtifact(supabase, run.id, "model_raw_output", { finalSynthesisContinua: true, content: continued.map((f) => f.content).join("\n").slice(0, 120_000) });
+      return continued;
+    }
+    throw error;
+  }
   await saveArtifact(supabase, run.id, "model_raw_output", { finalSynthesis: true, content: content.slice(0, 120_000) });
   const parsed = normalizeGeneratedFiles(content, project.name);
   return parsed ?? files;
