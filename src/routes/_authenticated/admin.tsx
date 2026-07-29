@@ -271,11 +271,7 @@ function Admin() {
                     }
                     className="w-full rounded-md border border-border bg-background px-3 py-2"
                   >
-                    <option value="deepseek">DeepSeek</option>
-                    <option value="nvidia-nim">Nvidia NIM</option>
-                    <option value="openrouter">OpenRouter</option>
-                    <option value="opencode-free">OpenCode Free</option>
-                    <option value="openai-compatible">OpenAI-compatible oficial</option>
+                    <option value="9router">9router</option>
                   </select>
                 </AdminField>
                 <AdminField label="Endpoint">

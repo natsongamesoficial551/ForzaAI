@@ -13,58 +13,7 @@ const MODEL_IDS = new Set([
   "forza-1-pro",
   "forza-2-pro",
   "forza-2-5-thinking",
-  "forza-nim-minimax",
-  "forza-nim-nemotron",
-  "forza-openrouter-deepseek-pro",
-  "forza-openrouter-free",
-  "forza-openrouter-glm",
-  "forza-openrouter-qwen",
-  "forza-openrouter-claude-fable",
-  "forza-openrouter-claude-sonnet",
-  "forza-opencode-free-flash",
 ]);
-
-const PROVIDER_CONTEXT_WINDOWS = {
-  deepseek: 128_000,
-  "nvidia-nim": 128_000,
-  openrouter: 200_000,
-  "opencode-free": 64_000,
-  "openai-compatible": 64_000,
-};
-
-const ENV_KEY_FOR_PROVIDER = {
-  deepseek: ["DEEPSEEK_API_KEY"],
-  "nvidia-nim": ["NVIDIA_NIM_API_KEY", "NVIDIA_API_KEY"],
-  openrouter: ["OPENROUTER_API_KEY"],
-  "opencode-free": ["OPENCODE_API_KEY"],
-  "openai-compatible": [],
-};
-
-const PROVIDER_ENDPOINT_HINTS = {
-  deepseek: /api\.deepseek\.com/,
-  "nvidia-nim": /integrate\.api\.nvidia\.com/,
-  openrouter: /openrouter\.ai\/api\/v1/,
-  "opencode-free": /opencode\.ai\/api\/v1/,
-  "openai-compatible": null,
-};
-
-const normalizeProviderKind = (raw, endpoint) => {
-  const value = String(raw || "").trim().toLowerCase();
-  if (value === "deepseek" || /api\.deepseek\.com/.test(endpoint)) return "deepseek";
-  if (value === "nvidia-nim" || value === "nvidia" || /integrate\.api\.nvidia\.com/.test(endpoint)) return "nvidia-nim";
-  if (value === "openrouter" || /openrouter\.ai\/api\/v1/.test(endpoint)) return "openrouter";
-  if (value === "opencode-free" || value === "opencode" || /opencode\.ai\/api\/v1/.test(endpoint)) return "opencode-free";
-  return "openai-compatible";
-};
-
-const envKeyForProvider = (provider) => {
-  const keys = ENV_KEY_FOR_PROVIDER[provider] || [];
-  for (const key of keys) {
-    const value = process.env[key];
-    if (value) return value;
-  }
-  return null;
-};
 
 const json = (status, body) => new Response(JSON.stringify(body), {
   status,
@@ -357,9 +306,8 @@ function deterministicPremiumFiles(project, job, plans, reason = []) {
   ];
 }
 
-async function routeModel(supabase, modelId, hasSubscription) {
+async function routeModel(supabase, modelId) {
   const requestedModel = MODEL_IDS.has(modelId) ? modelId : "forza-1-flash";
-  const deepSeekKey = process.env.DEEPSEEK_API_KEY;
   const { data: setting } = await supabase
     .from("ai_provider_settings")
     .select("provider, label, endpoint, upstream_model, api_key, requires_subscription, credit_multiplier, is_enabled")
@@ -367,52 +315,18 @@ async function routeModel(supabase, modelId, hasSubscription) {
     .eq("is_enabled", true)
     .maybeSingle();
 
-  if (setting) {
-    if (setting.requires_subscription && !hasSubscription) throw new Error("Esse modelo é exclusivo para assinantes Pro.");
-    const provider = normalizeProviderKind(setting.provider, setting.endpoint);
-    const endpoint = String(setting.endpoint || "").trim();
-    if (provider === "deepseek" && !endpoint.includes("api.deepseek.com")) {
-      throw new Error("Configuração inválida: provider DeepSeek está apontando para endpoint que não é da DeepSeek.");
-    }
-    if (provider !== "deepseek" && endpoint.includes("api.deepseek.com")) {
-      throw new Error("Configuração inválida: endpoint da DeepSeek precisa usar provider DeepSeek.");
-    }
-    if (provider === "nvidia-nim" && !endpoint.includes("integrate.api.nvidia.com")) {
-      throw new Error("Configuração inválida: Nvidia NIM precisa usar integrate.api.nvidia.com.");
-    }
-    if (provider === "openrouter" && !endpoint.includes("openrouter.ai/api/v1")) {
-      throw new Error("Configuração inválida: OpenRouter precisa usar openrouter.ai/api/v1.");
-    }
-    if (provider === "opencode-free" && !endpoint.includes("opencode.ai/api/v1")) {
-      throw new Error("Configuração inválida: OpenCode Free precisa usar opencode.ai/api/v1.");
-    }
-    const apiKey = setting.api_key || envKeyForProvider(provider) || (provider === "deepseek" ? deepSeekKey : null);
-    if (!apiKey) throw new Error(`API key não configurada para ${setting.label}.`);
-    return {
-      id: requestedModel,
-      label: setting.label,
-      provider,
-      endpoint,
-      upstreamModel: setting.upstream_model,
-      apiKey,
-      creditMultiplier: Number(setting.credit_multiplier || 1),
-      estimatedContextWindow: PROVIDER_CONTEXT_WINDOWS[provider] ?? 64_000,
-    };
-  }
+  if (!setting) throw new Error(`Modelo ${requestedModel} não configurado no 9router.`);
 
-  if ((requestedModel === "forza-2-pro" || requestedModel === "forza-2-5-thinking") && !hasSubscription) {
-    throw new Error("Esse modelo é exclusivo para assinantes Pro.");
-  }
-  if (!deepSeekKey) throw new Error("DEEPSEEK_API_KEY não configurada.");
+  const apiKey = setting.api_key || process.env["9ROUTER_API_KEY"];
+  if (!apiKey) throw new Error(`API key do 9router não configurada para ${setting.label}.`);
   return {
     id: requestedModel,
-    label: requestedModel === "forza-2-5-thinking" ? "Forza 2.5 Thinking" : "Forza 1.0 Flash",
-    provider: "deepseek",
-    endpoint: "https://api.deepseek.com/v1/chat/completions",
-    upstreamModel: requestedModel === "forza-2-5-thinking" ? "deepseek-reasoner" : "deepseek-chat",
-    apiKey: deepSeekKey,
-    creditMultiplier: requestedModel === "forza-2-5-thinking" ? 4 : 1,
-    estimatedContextWindow: PROVIDER_CONTEXT_WINDOWS.deepseek,
+    label: setting.label,
+    provider: "9router",
+    endpoint: setting.endpoint,
+    upstreamModel: setting.upstream_model,
+    apiKey,
+    creditMultiplier: Number(setting.credit_multiplier || 1),
   };
 }
 
@@ -1060,8 +974,7 @@ export default async (request) => {
       .single();
     if (jobError || !job) throw jobError ?? new Error("Job não encontrado");
 
-    const { data: hasSubscription } = await supabase.rpc("has_active_subscription", { _user_id: job.user_id });
-    const model = await routeModel(supabase, job.model_id, Boolean(hasSubscription));
+    const model = await routeModel(supabase, job.model_id);
     const creditCost = Math.ceil(model.creditMultiplier || 1);
 
     const { data: project, error: projectError } = await supabase

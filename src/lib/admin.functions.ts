@@ -13,23 +13,6 @@ const ForzaModelSchema = z.enum([
   "forza-1-pro",
   "forza-2-pro",
   "forza-2-5-thinking",
-  "forza-nim-minimax",
-  "forza-nim-nemotron",
-  "forza-openrouter-deepseek-pro",
-  "forza-openrouter-free",
-  "forza-openrouter-glm",
-  "forza-openrouter-qwen",
-  "forza-openrouter-claude-fable",
-  "forza-openrouter-claude-sonnet",
-  "forza-opencode-free-flash",
-]);
-
-const AiProviderKindSchema = z.enum([
-  "deepseek",
-  "nvidia-nim",
-  "openrouter",
-  "opencode-free",
-  "openai-compatible",
 ]);
 
 const AiProviderSettingSchema = z.object({
@@ -83,7 +66,6 @@ export const getAdminMetrics = createServerFn({ method: "POST" })
     const proCount = active.filter((s: any) => s.price_id === "pro_monthly").length;
     const businessCount = active.filter((s: any) => s.price_id === "business_monthly").length;
 
-    // signup last 30 days timeseries
     const users = usersRes.data ?? [];
     const now = new Date();
     const series: { date: string; signups: number }[] = [];
@@ -155,33 +137,11 @@ export const saveAiProviderSetting = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     await ensureAdmin(context.supabase, context.userId);
 
-    const provider = data.provider.trim();
-    const endpoint = data.endpoint.trim();
-    if (provider === "deepseek" && !endpoint.includes("api.deepseek.com")) {
-      throw new Error("Provider DeepSeek precisa usar endpoint da DeepSeek. Para NVIDIA, OpenRouter ou OpenCode Free, selecione o provider correspondente.");
-    }
-    if (provider !== "deepseek" && endpoint.includes("api.deepseek.com")) {
-      throw new Error("Endpoint da DeepSeek precisa usar provider DeepSeek.");
-    }
-    if (provider === "nvidia-nim" && !endpoint.includes("integrate.api.nvidia.com")) {
-      throw new Error("Provider Nvidia NIM precisa usar https://integrate.api.nvidia.com/v1/chat/completions.");
-    }
-    if (provider === "openrouter" && !endpoint.includes("openrouter.ai/api/v1")) {
-      throw new Error("Provider OpenRouter precisa usar https://openrouter.ai/api/v1/chat/completions.");
-    }
-    if (provider === "opencode-free" && !endpoint.includes("opencode.ai/api/v1")) {
-      throw new Error("Provider OpenCode Free precisa usar https://opencode.ai/api/v1/chat/completions.");
-    }
-    const validated = AiProviderKindSchema.safeParse(provider);
-    if (!validated.success) {
-      throw new Error("Provider inválido. Use deepseek, nvidia-nim, openrouter, opencode-free ou openai-compatible.");
-    }
-
     const payload: Record<string, unknown> = {
       forza_model_id: data.forzaModelId,
-      provider,
+      provider: "9router",
       label: data.label.trim(),
-      endpoint,
+      endpoint: data.endpoint.trim(),
       upstream_model: data.upstreamModel.trim(),
       requires_subscription: data.requiresSubscription,
       credit_multiplier: data.creditMultiplier,
