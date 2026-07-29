@@ -449,20 +449,36 @@ function isGatewayError(message) {
   return /502|504|gateway|timeout|congestionado|instabilidade|não respondeu/i.test(String(message));
 }
 
-async function continuaRetry(model, workingFiles, supabase, jobId, extraContext = "") {
-  const continuaMsg = `Continua de onde parou. Complete os três arquivos.\n\n${extraContext}\n\nArquivos parciais atuais:\n${filesContext(workingFiles)}\n\nRetorne SOMENTE:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo`;
-  await updateJob(supabase, jobId, { stage: "Forza Engine: retomando de onde parou (Continua)…" });
-  const content = await fetchAiText(model, {
-    stream: false,
-    temperature: 0.1,
-    messages: [
-      { role: "system", content: "Você é o finalizador do ForzaAI. Continue exatamente de onde parou. Retorne os três arquivos COMPLETOS. Não resuma, não corte." },
-      { role: "user", content: continuaMsg },
-    ],
-  }, { supabase, jobId });
-  const parsed = normalizeGeneratedFiles(content, "");
-  if (!parsed) throw new Error("Continua não retornou arquivos válidos.");
-  return parsed;
+async function continuaLoop(model, workingFiles, supabase, jobId, extraContext = "", maxAttempts = 8) {
+  let files = workingFiles;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await updateJob(supabase, jobId, {
+      stage: `Forza Engine: Continua (${attempt}/${maxAttempts})…`,
+    });
+    try {
+      const continuaMsg = `Continua de onde parou. Complete os três arquivos.\n\n${extraContext}\n\nArquivos parciais atuais:\n${filesContext(files)}\n\nRetorne SOMENTE:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo`;
+      const content = await fetchAiText(model, {
+        stream: false,
+        temperature: 0.1,
+        messages: [
+          { role: "system", content: "Você é o finalizador do ForzaAI. Continue exatamente de onde parou. Retorne os três arquivos COMPLETOS. Não resuma, não corte." },
+          { role: "user", content: continuaMsg },
+        ],
+      }, { supabase, jobId });
+      const parsed = normalizeGeneratedFiles(content, "");
+      if (parsed) return parsed;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (attempt < maxAttempts && isGatewayError(msg)) {
+        await updateJob(supabase, jobId, {
+          stage: `Forza Engine: Continua (${attempt}/${maxAttempts}) falhou, repetindo…`,
+        });
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`ContinuaLoop: não completou após ${maxAttempts} tentativas.`);
 }
 
 async function createTask(supabase, runId, position, phase, title, description, input = null) {
@@ -610,18 +626,25 @@ async function generateInitialFiles(supabase, model, run, job, project, plans, s
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (isGatewayError(message)) {
-      await updateJob(supabase, job.id, { stage: "Forza Engine: gerando novamente com Continua…" });
+      await updateJob(supabase, job.id, { stage: "Forza Engine: gerando progressivamente (Continua loop)…" });
       content = await fetchAiText(model, {
         stream: false,
         temperature: 0.1,
         messages: [
-          { role: "system", content: "Gere um site completo. Retorne SOMENTE:\n=== index.html ===\n=== styles.css ===\n=== script.js ===" },
-          { role: "user", content: `Projeto: ${project.name}\nPedido: ${job.message}\nGere o site completo.` },
+          { role: "system", content: "Gere um site. Retorne SOMENTE:\n=== index.html ===\n=== styles.css ===\n=== script.js ===" },
+          { role: "user", content: `Projeto: ${project.name}\nPedido: ${job.message}` },
         ],
       }, { supabase, jobId: job.id });
-    } else {
-      throw error;
+      let workingFiles = normalizeGeneratedFiles(content, project.name);
+      if (workingFiles) {
+        const continued = await continuaLoop(model, workingFiles, supabase, job.id, `Complete o site: ${project.name}\nPedido: ${job.message}`);
+        if (continued) {
+          if (generationTask) await updateTask(supabase, generationTask.id, { status: "completed", output: { files: continued.map((f) => ({ path: f.path, chars: f.content.length })), continua: true }, completed_at: new Date().toISOString() });
+          return continued;
+        }
+      }
     }
+    throw error;
   }
   await saveArtifact(supabase, run.id, "model_raw_output", { initialFullGeneration: true, content: content.slice(0, 120_000) });
   const parsed = normalizeGeneratedFiles(content, project.name);
@@ -659,15 +682,15 @@ async function implementFiles(supabase, model, run, job, project, plans, tasks, 
       await updateTask(supabase, task.id, { status: "failed", error: message });
       await saveArtifact(supabase, run.id, "model_raw_output", { taskId: task.id, title: task.title, failed: true, error: message });
       if (workingFiles.length && isGatewayError(message)) {
-        await updateJob(supabase, job.id, { stage: `Forza Engine: gateway na task, tentando Continua…` });
+        await updateJob(supabase, job.id, { stage: `Forza Engine: gateway na task, tentando Continua loop…` });
         try {
-          const continued = await continuaRetry(model, workingFiles, supabase, job.id, `Task original: ${task.title}\n${task.description}`);
+          const continued = await continuaLoop(model, workingFiles, supabase, job.id, `Task original: ${task.title}\n${task.description}`);
           workingFiles = continued;
           await updateTask(supabase, task.id, { status: "completed", output: { files: continued.map((f) => ({ path: f.path, chars: f.content.length })), continua: true }, completed_at: new Date().toISOString() });
           continue;
         } catch (continuaError) {
           const cm = continuaError instanceof Error ? continuaError.message : String(continuaError);
-          await updateJob(supabase, job.id, { stage: `Forza Engine: continua também falhou: ${cm.slice(0, 120)}` });
+          await updateJob(supabase, job.id, { stage: `Forza Engine: continua loop falhou: ${cm.slice(0, 120)}` });
           break;
         }
       }
@@ -714,8 +737,8 @@ async function synthesizeFinalFiles(supabase, model, run, job, project, plans, f
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (isGatewayError(message) && files?.length) {
-      await updateJob(supabase, job.id, { stage: "Forza Engine: finalizando com Continua…" });
-      const continued = await continuaRetry(model, files, supabase, job.id, "Finalize e complete o site.");
+      await updateJob(supabase, job.id, { stage: "Forza Engine: finalizando com Continua loop…" });
+      const continued = await continuaLoop(model, files, supabase, job.id, "Finalize e complete o site.");
       await saveArtifact(supabase, run.id, "model_raw_output", { finalSynthesisContinua: true, content: continued.map((f) => f.content).join("\n").slice(0, 120_000) });
       return continued;
     }
