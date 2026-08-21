@@ -15,7 +15,8 @@ REGRAS CRÍTICAS:
 6. JS apenas para interações (menu mobile, smooth scroll, validação). Zero dependências externas.
 7. Para imagens use a tag especial: <img data-ai-gen="prompt em inglês descrevendo a imagem desejada" alt="..." class="..."> — o sistema gera automaticamente. Use até 4 imagens por site.
 8. Só crie recursos com IA dentro do site gerado quando o cliente pedir explicitamente, como chat com IA, analisador de PDF, gerador com IA ou assistente inteligente. Nesses casos, implemente a interface e deixe a chamada preparada para um endpoint backend protegido do ForzaAI; nunca peça API key ao usuário final e nunca exponha chave no HTML/JS.
-9. Responda em português do Brasil, amigável e direto. "message" é sua resposta curta no chat.
+9. Quando o cliente pedir assistente de estudo, navegador com IA, leitor de PDF/MD/documentos, prints ou modo professor, gere uma experiência completa: área de navegador/documento com scroll, upload/coleção de PDF/MD/TXT/imagens, botão "Print manual" que armazena várias capturas no estado/localStorage, chat que usa esses prints como contexto, modo Professor que explica passo a passo com perguntas socráticas, exemplos e mini-exercícios, e modo Pesquisa que sinaliza quando não há certeza e consulta um endpoint backend protegido de busca antes de responder. No frontend, simule/prepare fetch para endpoints seguros como /api/ai/chat e /api/research/search; nunca exponha API key.
+10. Responda em português do Brasil, amigável e direto. "message" é sua resposta curta no chat.
 
 FORMATO OBRIGATÓRIO (apenas JSON, sem markdown):
 {"message":"texto para o usuário","files":[{"path":"index.html","language":"html","content":"..."},{"path":"styles.css","language":"css","content":"..."},{"path":"script.js","language":"javascript","content":"..."}]}`;
@@ -27,14 +28,14 @@ const AttachmentSchema = z.object({
   type: z.string().max(120).optional(),
   size: z.number().int().nonnegative().max(8_000_000),
   kind: z.enum(["image", "zip", "text", "file"]),
-  content: z.string().max(120_000),
+  content: z.string().max(2_500_000),
 });
 
 const InputSchema = z.object({
   projectId: z.string().uuid(),
   message: z.string().min(1).max(12000),
   modelId: ModelSchema.optional(),
-  attachments: z.array(AttachmentSchema).max(6).optional(),
+  attachments: z.array(AttachmentSchema).max(12).optional(),
   previewSnapshot: z
     .object({
       viewport: z.enum(["desktop", "tablet", "mobile"]),
@@ -95,7 +96,14 @@ type GeneratedFile = {
   content: string;
 };
 
-type ProjectKind = "landing_page" | "portfolio" | "ecommerce" | "saas" | "dashboard" | "internal_tool" | "other";
+type ProjectKind =
+  | "landing_page"
+  | "portfolio"
+  | "ecommerce"
+  | "saas"
+  | "dashboard"
+  | "internal_tool"
+  | "other";
 type ProjectComplexity = "simple" | "standard" | "advanced" | "enterprise";
 
 type WizardClassification = {
@@ -116,12 +124,36 @@ const projectKindLabels: Record<ProjectKind, string> = {
   other: "projeto digital",
 };
 
-function classifyPromptLocally(prompt: string, project: { site_type?: string | null; description?: string | null; name?: string | null }): WizardClassification {
-  const text = `${prompt} ${project.site_type ?? ""} ${project.description ?? ""} ${project.name ?? ""}`.toLowerCase();
+function classifyPromptLocally(
+  prompt: string,
+  project: { site_type?: string | null; description?: string | null; name?: string | null },
+): WizardClassification {
+  const text =
+    `${prompt} ${project.site_type ?? ""} ${project.description ?? ""} ${project.name ?? ""}`.toLowerCase();
   const has = (terms: string[]) => terms.some((term) => text.includes(term));
-  const projectKind: ProjectKind = has(["saas", "software as a service", "assinatura", "dashboard", "login", "usuário", "usuarios", "multi tenant", "crm", "erp"])
+  const projectKind: ProjectKind = has([
+    "saas",
+    "software as a service",
+    "assinatura",
+    "dashboard",
+    "login",
+    "usuário",
+    "usuarios",
+    "multi tenant",
+    "crm",
+    "erp",
+  ])
     ? "saas"
-    : has(["e-commerce", "ecommerce", "loja", "produto", "carrinho", "checkout", "catálogo", "catalogo"])
+    : has([
+          "e-commerce",
+          "ecommerce",
+          "loja",
+          "produto",
+          "carrinho",
+          "checkout",
+          "catálogo",
+          "catalogo",
+        ])
       ? "ecommerce"
       : has(["portfolio", "portfólio", "designer", "freelancer", "currículo", "curriculo"])
         ? "portfolio"
@@ -132,14 +164,29 @@ function classifyPromptLocally(prompt: string, project: { site_type?: string | n
             : has(["landing", "lp", "página de vendas", "pagina de vendas", "captura", "site"])
               ? "landing_page"
               : "other";
-  const complexity: ProjectComplexity = projectKind === "saas" || projectKind === "internal_tool"
-    ? "enterprise"
-    : projectKind === "ecommerce" || projectKind === "dashboard"
-      ? "advanced"
-      : projectKind === "landing_page" || projectKind === "portfolio"
-        ? "standard"
-        : "simple";
-  const shouldAsk = has(["site", "landing", "saas", "app", "sistema", "loja", "e-commerce", "ecommerce", "portfolio", "portfólio", "dashboard", "página", "pagina"]);
+  const complexity: ProjectComplexity =
+    projectKind === "saas" || projectKind === "internal_tool"
+      ? "enterprise"
+      : projectKind === "ecommerce" || projectKind === "dashboard"
+        ? "advanced"
+        : projectKind === "landing_page" || projectKind === "portfolio"
+          ? "standard"
+          : "simple";
+  const shouldAsk = has([
+    "site",
+    "landing",
+    "saas",
+    "app",
+    "sistema",
+    "loja",
+    "e-commerce",
+    "ecommerce",
+    "portfolio",
+    "portfólio",
+    "dashboard",
+    "página",
+    "pagina",
+  ]);
   return {
     shouldAsk,
     projectKind,
@@ -150,83 +197,297 @@ function classifyPromptLocally(prompt: string, project: { site_type?: string | n
 }
 
 function optionQuestion(id: string, question: string, options: string[]): WizardQuestion {
-  const uniqueOptions = [...new Set(options.map((option) => option.trim()).filter(Boolean))].slice(0, 4);
+  const uniqueOptions = [...new Set(options.map((option) => option.trim()).filter(Boolean))].slice(
+    0,
+    4,
+  );
   return { id, question, options: uniqueOptions };
 }
 
-function contextualQuestions(kind: ProjectKind, complexity: ProjectComplexity, prompt: string): WizardQuestion[] {
+function contextualQuestions(
+  kind: ProjectKind,
+  complexity: ProjectComplexity,
+  prompt: string,
+): WizardQuestion[] {
   const promptHint = prompt.length > 80 ? prompt.slice(0, 80) : prompt;
   const shared = [
-    optionQuestion("visual_style", "Qual visual deve guiar toda a interface?", ["Minimalista premium", "SaaS moderno escuro", "Editorial sofisticado", "Clean claro e elegante"]),
-    optionQuestion("conversion", "Qual ação principal precisa ficar impossível de ignorar?", ["Agendar conversa", "Começar grátis", "Ver projetos/cases", "Comprar ou contratar"]),
+    optionQuestion("visual_style", "Qual visual deve guiar toda a interface?", [
+      "Minimalista premium",
+      "SaaS moderno escuro",
+      "Editorial sofisticado",
+      "Clean claro e elegante",
+    ]),
+    optionQuestion("conversion", "Qual ação principal precisa ficar impossível de ignorar?", [
+      "Agendar conversa",
+      "Começar grátis",
+      "Ver projetos/cases",
+      "Comprar ou contratar",
+    ]),
   ];
   const byKind: Record<ProjectKind, WizardQuestion[]> = {
     landing_page: [
-      optionQuestion("promise", `Qual promessa central a página deve vender para “${promptHint}”?`, ["Economizar tempo", "Aumentar vendas", "Parecer mais profissional", "Automatizar operação"]),
-      optionQuestion("audience", "Para quem a copy deve falar diretamente?", ["Fundadores B2B", "Pequenas empresas", "Criadores/autônomos", "Clientes finais premium"]),
-      optionQuestion("pricing", "Como o pricing deve aparecer?", ["3 planos comparáveis", "Plano único destacado", "Trial + Pro", "Sob consulta"]),
-      optionQuestion("proof", "Que prova aumenta mais confiança?", ["Depoimentos curtos", "Métricas de resultado", "Logos de clientes", "Antes/depois"]),
-      optionQuestion("sections", "Qual estrutura deve vir antes do CTA final?", ["Dor > solução > preço", "Hero > features > demo", "Benefícios > cases > FAQ", "Como funciona > planos"]),
+      optionQuestion(
+        "promise",
+        `Qual promessa central a página deve vender para “${promptHint}”?`,
+        [
+          "Economizar tempo",
+          "Aumentar vendas",
+          "Parecer mais profissional",
+          "Automatizar operação",
+        ],
+      ),
+      optionQuestion("audience", "Para quem a copy deve falar diretamente?", [
+        "Fundadores B2B",
+        "Pequenas empresas",
+        "Criadores/autônomos",
+        "Clientes finais premium",
+      ]),
+      optionQuestion("pricing", "Como o pricing deve aparecer?", [
+        "3 planos comparáveis",
+        "Plano único destacado",
+        "Trial + Pro",
+        "Sob consulta",
+      ]),
+      optionQuestion("proof", "Que prova aumenta mais confiança?", [
+        "Depoimentos curtos",
+        "Métricas de resultado",
+        "Logos de clientes",
+        "Antes/depois",
+      ]),
+      optionQuestion("sections", "Qual estrutura deve vir antes do CTA final?", [
+        "Dor > solução > preço",
+        "Hero > features > demo",
+        "Benefícios > cases > FAQ",
+        "Como funciona > planos",
+      ]),
     ],
     portfolio: [
-      optionQuestion("positioning", `Qual posicionamento combina com “${promptHint}”?`, ["Designer especialista", "Criativo premium", "Freelancer estratégico", "Estúdio autoral"]),
-      optionQuestion("project_grid", "Como os trabalhos devem ser apresentados?", ["Cards grandes visuais", "Cases com narrativa", "Galeria minimalista", "Antes/depois com métricas"]),
-      optionQuestion("services", "Quais serviços devem ficar claros?", ["Branding + UI", "Sites e landing pages", "Produto digital", "Identidade visual"]),
-      optionQuestion("personality", "Qual sensação o visitante deve ter?", ["Confiança premium", "Criatividade ousada", "Calma minimalista", "Precisão técnica"]),
-      optionQuestion("contact", "Qual caminho de contato deve dominar?", ["WhatsApp direto", "Formulário curto", "Agendar chamada", "E-mail profissional"]),
+      optionQuestion("positioning", `Qual posicionamento combina com “${promptHint}”?`, [
+        "Designer especialista",
+        "Criativo premium",
+        "Freelancer estratégico",
+        "Estúdio autoral",
+      ]),
+      optionQuestion("project_grid", "Como os trabalhos devem ser apresentados?", [
+        "Cards grandes visuais",
+        "Cases com narrativa",
+        "Galeria minimalista",
+        "Antes/depois com métricas",
+      ]),
+      optionQuestion("services", "Quais serviços devem ficar claros?", [
+        "Branding + UI",
+        "Sites e landing pages",
+        "Produto digital",
+        "Identidade visual",
+      ]),
+      optionQuestion("personality", "Qual sensação o visitante deve ter?", [
+        "Confiança premium",
+        "Criatividade ousada",
+        "Calma minimalista",
+        "Precisão técnica",
+      ]),
+      optionQuestion("contact", "Qual caminho de contato deve dominar?", [
+        "WhatsApp direto",
+        "Formulário curto",
+        "Agendar chamada",
+        "E-mail profissional",
+      ]),
     ],
     ecommerce: [
-      optionQuestion("catalog", "Qual experiência de catálogo deve parecer pronta para venda?", ["Coleções + filtros", "Produtos hero", "Mais vendidos", "Lançamentos premium"]),
-      optionQuestion("purchase_flow", "Qual fluxo de compra deve ser simulado?", ["Carrinho lateral", "Checkout em etapas", "Compra rápida", "Wishlist + cupom"]),
-      optionQuestion("trust", "Qual bloco reduz mais objeção?", ["Frete e trocas", "Avaliações reais", "Pagamento seguro", "Garantia destacada"]),
-      optionQuestion("merchandising", "Como destacar produtos?", ["Fotos grandes", "Badges de oferta", "Comparação de variações", "Bundles/kits"]),
-      optionQuestion("brand", "Qual estética da loja?", ["Luxo clean", "Street moderno", "Natural/artesanal", "Tech futurista"]),
+      optionQuestion("catalog", "Qual experiência de catálogo deve parecer pronta para venda?", [
+        "Coleções + filtros",
+        "Produtos hero",
+        "Mais vendidos",
+        "Lançamentos premium",
+      ]),
+      optionQuestion("purchase_flow", "Qual fluxo de compra deve ser simulado?", [
+        "Carrinho lateral",
+        "Checkout em etapas",
+        "Compra rápida",
+        "Wishlist + cupom",
+      ]),
+      optionQuestion("trust", "Qual bloco reduz mais objeção?", [
+        "Frete e trocas",
+        "Avaliações reais",
+        "Pagamento seguro",
+        "Garantia destacada",
+      ]),
+      optionQuestion("merchandising", "Como destacar produtos?", [
+        "Fotos grandes",
+        "Badges de oferta",
+        "Comparação de variações",
+        "Bundles/kits",
+      ]),
+      optionQuestion("brand", "Qual estética da loja?", [
+        "Luxo clean",
+        "Street moderno",
+        "Natural/artesanal",
+        "Tech futurista",
+      ]),
     ],
     saas: [
-      optionQuestion("user", `Quem precisa sentir que este SaaS resolve “${promptHint}”?`, ["Founder/gestor", "Equipe operacional", "Cliente final", "Agência/consultoria"]),
-      optionQuestion("modules", "Quais telas precisam existir para parecer SaaS completo?", ["Onboarding + dashboard", "CRM + tarefas", "Billing + settings", "Projetos + relatórios"]),
-      optionQuestion("roles", "Qual modelo de acesso deve ser planejado?", ["Admin e usuário", "Owner/manager/member", "Equipe e cliente", "Multiempresa"]),
-      optionQuestion("data", "Quais dados mockados dão mais realidade ao produto?", ["Receita e métricas", "Clientes e pipeline", "Projetos e tarefas", "Uso e créditos"]),
-      optionQuestion("billing", "Como os planos devem funcionar no preview?", ["Free/Pro/Business", "Trial + assinatura", "Créditos por uso", "Por usuário"]),
-      optionQuestion("integrations", "Quais integrações o blueprint deve prever sem expor segredos?", ["Supabase + Stripe", "GitHub + IA", "Webhooks + API", "Nenhuma agora"]),
+      optionQuestion("user", `Quem precisa sentir que este SaaS resolve “${promptHint}”?`, [
+        "Founder/gestor",
+        "Equipe operacional",
+        "Cliente final",
+        "Agência/consultoria",
+      ]),
+      optionQuestion("modules", "Quais telas precisam existir para parecer SaaS completo?", [
+        "Onboarding + dashboard",
+        "CRM + tarefas",
+        "Billing + settings",
+        "Projetos + relatórios",
+      ]),
+      optionQuestion("roles", "Qual modelo de acesso deve ser planejado?", [
+        "Admin e usuário",
+        "Owner/manager/member",
+        "Equipe e cliente",
+        "Multiempresa",
+      ]),
+      optionQuestion("data", "Quais dados mockados dão mais realidade ao produto?", [
+        "Receita e métricas",
+        "Clientes e pipeline",
+        "Projetos e tarefas",
+        "Uso e créditos",
+      ]),
+      optionQuestion("billing", "Como os planos devem funcionar no preview?", [
+        "Free/Pro/Business",
+        "Trial + assinatura",
+        "Créditos por uso",
+        "Por usuário",
+      ]),
+      optionQuestion(
+        "integrations",
+        "Quais integrações o blueprint deve prever sem expor segredos?",
+        ["Supabase + Stripe", "GitHub + IA", "Webhooks + API", "Nenhuma agora"],
+      ),
     ],
     dashboard: [
-      optionQuestion("decision", "Qual decisão o dashboard deve ajudar a tomar rápido?", ["Crescimento/receita", "Operação diária", "Performance de equipe", "Conversão/funil"]),
-      optionQuestion("layout", "Qual layout deve dominar a primeira dobra?", ["KPIs + gráfico", "Tabela + filtros", "Kanban operacional", "Alertas + ações"]),
-      optionQuestion("filters", "Quais controles deixam o dashboard realista?", ["Período e status", "Equipe e canal", "Cliente/projeto", "Exportação/relatório"]),
-      optionQuestion("states", "Quais estados a UI precisa prever?", ["Loading/vazio/erro", "Comparativos", "Drill-down", "Notificações"]),
+      optionQuestion("decision", "Qual decisão o dashboard deve ajudar a tomar rápido?", [
+        "Crescimento/receita",
+        "Operação diária",
+        "Performance de equipe",
+        "Conversão/funil",
+      ]),
+      optionQuestion("layout", "Qual layout deve dominar a primeira dobra?", [
+        "KPIs + gráfico",
+        "Tabela + filtros",
+        "Kanban operacional",
+        "Alertas + ações",
+      ]),
+      optionQuestion("filters", "Quais controles deixam o dashboard realista?", [
+        "Período e status",
+        "Equipe e canal",
+        "Cliente/projeto",
+        "Exportação/relatório",
+      ]),
+      optionQuestion("states", "Quais estados a UI precisa prever?", [
+        "Loading/vazio/erro",
+        "Comparativos",
+        "Drill-down",
+        "Notificações",
+      ]),
     ],
     internal_tool: [
-      optionQuestion("workflow", "Qual workflow precisa ser navegável no preview?", ["Solicitação > aprovação", "Cadastro > revisão", "Ticket > resolução", "Pedido > entrega"]),
-      optionQuestion("records", "Quais registros devem aparecer com dados reais mockados?", ["Clientes", "Pedidos", "Tarefas", "Documentos"]),
-      optionQuestion("permissions", "Qual regra de permissão deve ser planejada?", ["Admin/equipe", "Setores", "Solicitante/aprovador", "Auditoria"]),
-      optionQuestion("productivity", "Qual recurso dá sensação de sistema completo?", ["Busca + filtros", "Histórico/auditoria", "Comentários internos", "Relatórios"]),
+      optionQuestion("workflow", "Qual workflow precisa ser navegável no preview?", [
+        "Solicitação > aprovação",
+        "Cadastro > revisão",
+        "Ticket > resolução",
+        "Pedido > entrega",
+      ]),
+      optionQuestion("records", "Quais registros devem aparecer com dados reais mockados?", [
+        "Clientes",
+        "Pedidos",
+        "Tarefas",
+        "Documentos",
+      ]),
+      optionQuestion("permissions", "Qual regra de permissão deve ser planejada?", [
+        "Admin/equipe",
+        "Setores",
+        "Solicitante/aprovador",
+        "Auditoria",
+      ]),
+      optionQuestion("productivity", "Qual recurso dá sensação de sistema completo?", [
+        "Busca + filtros",
+        "Histórico/auditoria",
+        "Comentários internos",
+        "Relatórios",
+      ]),
     ],
     other: [
-      optionQuestion("goal", `Qual objetivo principal para “${promptHint}”?`, ["Vender", "Capturar leads", "Demonstrar produto", "Validar ideia"]),
-      optionQuestion("scope", "Qual escopo deve ser gerado agora?", ["Página completa", "Site com seções", "App navegável", "Dashboard mockado"]),
-      optionQuestion("must_have", "O que mais impacta a percepção de qualidade?", ["Visual premium", "Copy forte", "Fluxos completos", "Mobile perfeito"]),
-      optionQuestion("depth", "Qual nível de detalhe você espera?", ["Rápido e bonito", "Completo e convincente", "Técnico e estruturado", "Pronto para vender"]),
+      optionQuestion("goal", `Qual objetivo principal para “${promptHint}”?`, [
+        "Vender",
+        "Capturar leads",
+        "Demonstrar produto",
+        "Validar ideia",
+      ]),
+      optionQuestion("scope", "Qual escopo deve ser gerado agora?", [
+        "Página completa",
+        "Site com seções",
+        "App navegável",
+        "Dashboard mockado",
+      ]),
+      optionQuestion("must_have", "O que mais impacta a percepção de qualidade?", [
+        "Visual premium",
+        "Copy forte",
+        "Fluxos completos",
+        "Mobile perfeito",
+      ]),
+      optionQuestion("depth", "Qual nível de detalhe você espera?", [
+        "Rápido e bonito",
+        "Completo e convincente",
+        "Técnico e estruturado",
+        "Pronto para vender",
+      ]),
     ],
   };
   const questions = [...byKind[kind], ...shared];
   if (complexity === "enterprise") {
-    questions.push(optionQuestion("enterprise_depth", "Qual blueprint técnico deve ficar mais detalhado?", ["Backend/server functions", "Banco + RLS", "Integrações/OAuth", "Todos equilibrados"]));
+    questions.push(
+      optionQuestion("enterprise_depth", "Qual blueprint técnico deve ficar mais detalhado?", [
+        "Backend/server functions",
+        "Banco + RLS",
+        "Integrações/OAuth",
+        "Todos equilibrados",
+      ]),
+    );
   }
-  return questions.slice(0, kind === "saas" ? 8 : 6).map((question, index) => ({ ...question, id: `q${index + 1}_${question.id}` }));
+  return questions
+    .slice(0, kind === "saas" ? 8 : 6)
+    .map((question, index) => ({ ...question, id: `q${index + 1}_${question.id}` }));
 }
 
-function normalizeClassification(value: unknown, fallback: WizardClassification): WizardClassification {
+function normalizeClassification(
+  value: unknown,
+  fallback: WizardClassification,
+): WizardClassification {
   if (!value || typeof value !== "object") return fallback;
   const obj = value as Record<string, unknown>;
-  const allowedKinds: ProjectKind[] = ["landing_page", "portfolio", "ecommerce", "saas", "dashboard", "internal_tool", "other"];
+  const allowedKinds: ProjectKind[] = [
+    "landing_page",
+    "portfolio",
+    "ecommerce",
+    "saas",
+    "dashboard",
+    "internal_tool",
+    "other",
+  ];
   const allowedComplexities: ProjectComplexity[] = ["simple", "standard", "advanced", "enterprise"];
   return {
     shouldAsk: typeof obj.shouldAsk === "boolean" ? obj.shouldAsk : fallback.shouldAsk,
-    projectKind: allowedKinds.includes(obj.projectKind as ProjectKind) ? (obj.projectKind as ProjectKind) : fallback.projectKind,
-    complexity: allowedComplexities.includes(obj.complexity as ProjectComplexity) ? (obj.complexity as ProjectComplexity) : fallback.complexity,
-    summary: typeof obj.summary === "string" && obj.summary.trim() ? obj.summary.slice(0, 240) : fallback.summary,
-    missingContext: Array.isArray(obj.missingContext) ? obj.missingContext.map(String).slice(0, 8) : fallback.missingContext,
+    projectKind: allowedKinds.includes(obj.projectKind as ProjectKind)
+      ? (obj.projectKind as ProjectKind)
+      : fallback.projectKind,
+    complexity: allowedComplexities.includes(obj.complexity as ProjectComplexity)
+      ? (obj.complexity as ProjectComplexity)
+      : fallback.complexity,
+    summary:
+      typeof obj.summary === "string" && obj.summary.trim()
+        ? obj.summary.slice(0, 240)
+        : fallback.summary,
+    missingContext: Array.isArray(obj.missingContext)
+      ? obj.missingContext.map(String).slice(0, 8)
+      : fallback.missingContext,
   };
 }
 
@@ -331,7 +592,11 @@ function isCustomWizardOption(value: string | undefined) {
   return !!value && /^(outros?|outra|personalizado|personalizada)/i.test(value.trim());
 }
 
-function normalizeWizard(raw: unknown): { shouldAsk: boolean; summary?: string; questions: WizardQuestion[] } {
+function normalizeWizard(raw: unknown): {
+  shouldAsk: boolean;
+  summary?: string;
+  questions: WizardQuestion[];
+} {
   const parsed = WizardOutputSchema.parse(raw);
   const questions = parsed.questions
     .filter((question) => question.question.trim() && question.options.length >= 2)
@@ -371,7 +636,9 @@ function buildAttachmentContext(attachments: ChatAttachment[] | undefined) {
     .join("\n\n");
 }
 
-function buildPreviewContext(previewSnapshot: { viewport: "desktop" | "tablet" | "mobile"; html: string } | undefined) {
+function buildPreviewContext(
+  previewSnapshot: { viewport: "desktop" | "tablet" | "mobile"; html: string } | undefined,
+) {
   if (!previewSnapshot) return "";
   return `REVISAO VISUAL DO PREVIEW (${previewSnapshot.viewport}):\nAnalise o documento renderizado abaixo como se estivesse revisando um print do site. Procure erros visuais prováveis, quebras responsivas, contraste ruim, espaçamentos estranhos, conteúdo cortado, CTAs fracos, problemas de acessibilidade e inconsistências. Se encontrar problemas, corrija nos arquivos completos.\n\n${previewSnapshot.html}`;
 }
@@ -439,7 +706,10 @@ async function loadActiveSkills(supabase: any, projectId: string) {
   return (data ?? [])
     .map((row: any) => row.ai_skills)
     .filter(Boolean)
-    .map((skill: any) => `Skill: ${skill.name}\nDescrição: ${skill.description}\nInstrução: ${skill.prompt}`)
+    .map(
+      (skill: any) =>
+        `Skill: ${skill.name}\nDescrição: ${skill.description}\nInstrução: ${skill.prompt}`,
+    )
     .join("\n\n");
 }
 
@@ -472,9 +742,16 @@ function describeFetchFailure(error: unknown) {
   return detail || "erro de rede sem detalhe";
 }
 
-async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unknown>) {
+async function fetchAiCompletion(
+  model: RoutedAiModel,
+  body: Record<string, unknown>,
+  options: { timeoutMs?: number } = {},
+) {
+  // Timeout padrão longo (streaming/chat); callers síncronos (wizard) passam um
+  // deadline curto para não derrubar a função server antes do limite da Lambda.
+  const timeoutMs = options.timeoutMs ?? AI_REQUEST_TIMEOUT_MS;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = Date.now();
   let upstream: Response;
 
@@ -501,9 +778,13 @@ async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unkn
       error,
     });
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("A IA demorou demais para responder. Em produção, requests longas podem ser encerradas pela hospedagem; tente novamente ou escolha um modelo mais rápido.");
+      throw new Error(
+        "A IA demorou demais para responder. Em produção, requests longas podem ser encerradas pela hospedagem; tente novamente ou escolha um modelo mais rápido.",
+      );
     }
-    throw new Error(`Falha de conexão com o provedor ${model.label} em ${resolveEndpoint(model.endpoint)}: ${describeFetchFailure(error)}. Confira endpoint, rede da hospedagem e se o modelo upstream "${model.upstreamModel}" existe na API.`);
+    throw new Error(
+      `Falha de conexão com o provedor ${model.label} em ${resolveEndpoint(model.endpoint)}: ${describeFetchFailure(error)}. Confira endpoint, rede da hospedagem e se o modelo upstream "${model.upstreamModel}" existe na API.`,
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -519,27 +800,102 @@ async function fetchAiCompletion(model: RoutedAiModel, body: Record<string, unkn
   if (upstream.ok) return upstream;
 
   const errTxt = await upstream.text().catch(() => "");
-  if (upstream.status === 401 || upstream.status === 403) throw new Error(`Falha de autenticação no provedor ${model.label}: confira a API key e o provider selecionado.`);
+  if (upstream.status === 401 || upstream.status === 403)
+    throw new Error(
+      `Falha de autenticação no provedor ${model.label}: confira a API key e o provider selecionado.`,
+    );
   if (upstream.status === 402) throw new Error(`Créditos esgotados no provedor ${model.label}.`);
-  if (upstream.status === 400) throw new Error(`Configuração inválida no provedor ${model.label}: confira endpoint, parâmetros e se o modelo upstream "${model.upstreamModel}" existe. Detalhe: ${errTxt.slice(0, 240)}`);
-  if (upstream.status === 404) throw new Error(`Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`);
-  if (upstream.status === 429) throw new Error(`Limite do provedor ${model.label} atingido. Aguarde alguns segundos ou use outro modelo.`);
+  if (upstream.status === 400)
+    throw new Error(
+      `Configuração inválida no provedor ${model.label}: confira endpoint, parâmetros e se o modelo upstream "${model.upstreamModel}" existe. Detalhe: ${errTxt.slice(0, 240)}`,
+    );
+  if (upstream.status === 404)
+    throw new Error(
+      `Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`,
+    );
+  if (upstream.status === 429)
+    throw new Error(
+      `Limite do provedor ${model.label} atingido. Aguarde alguns segundos ou use outro modelo.`,
+    );
   throw new Error(`Falha no provedor ${model.label} (${upstream.status}): ${errTxt.slice(0, 240)}`);
 }
 
-export async function fetchAiText(model: RoutedAiModel, body: Record<string, unknown>) {
-  const upstream = await fetchAiCompletion(model, body);
-  const payload = await upstream.json();
-  const content = payload?.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.trim()) {
-    throw new Error("A IA retornou uma resposta vazia. Tente novamente.");
+// Extrai o primeiro objeto JSON balanceado de um corpo que pode ser JSON puro,
+// SSE ("data: {...}\n\ndata: [DONE]") ou JSON colado com sufixo SSE. Retorna null se não achar.
+// Alguns gateways (9router) devolvem corpo SSE mesmo com stream:false no request.
+function parseGatewayPayload(raw: unknown): Record<string, unknown> | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  if (text.startsWith("{")) {
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      /* segue para parser balanceado */
+    }
   }
-  return content;
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      if (inString) escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{" || ch === "[") depth++;
+    else if (ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0) {
+        const candidate = text.slice(start, i + 1);
+        try {
+          return JSON.parse(candidate) as Record<string, unknown>;
+        } catch {
+          break; // objeto de nível 0 malformado — não há nada melhor adiante
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export async function fetchAiText(
+  model: RoutedAiModel,
+  body: Record<string, unknown>,
+  options: { timeoutMs?: number } = {},
+) {
+  const upstream = await fetchAiCompletion(model, body, options);
+  const rawText = await upstream.text();
+  const payload = parseGatewayPayload(rawText);
+  if (!payload) throw new Error("Resposta ilegível do provedor: corpo não-JSON ou vazio.");
+  const choice = (payload.choices as Array<Record<string, unknown>> | undefined)?.[0];
+  const message = (choice?.message ?? {}) as Record<string, unknown>;
+  // Modelos de raciocínio podem devolver content vazio com o texto em
+  // reasoning/reasoning_content quando o budget de tokens é curto.
+  const content =
+    [message.content, message.reasoning_content, message.reasoning, choice?.text]
+      .filter((value) => typeof value === "string" && value.trim())
+      .shift() ?? "";
+  if (!content.trim()) throw new Error("A IA retornou uma resposta vazia. Tente novamente.");
+  return content as string;
 }
 
 function extractDelimitedFile(text: string, path: GeneratedFile["path"]) {
   const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`===\\s*${escaped}\\s*===\\s*([\\s\\S]*?)(?=\\n===\\s*(?:index\\.html|styles\\.css|script\\.js)\\s*===|$)`, "i");
+  const re = new RegExp(
+    `===\\s*${escaped}\\s*===\\s*([\\s\\S]*?)(?=\\n===\\s*(?:index\\.html|styles\\.css|script\\.js)\\s*===|$)`,
+    "i",
+  );
   return stripGeneratedCode(text.match(re)?.[1] ?? "", languageFor(path)).trim();
 }
 
@@ -559,7 +915,7 @@ export async function generateReliableSiteFiles(opts: {
       {
         role: "system",
         content:
-          "Você é o ForzaAI, um gerador de sites profissional nível Lovable. Gere um site completo e bonito em UMA resposta, sem JSON e sem markdown. O formato obrigatório é exatamente:\n=== index.html ===\n...HTML completo...\n=== styles.css ===\n...CSS completo...\n=== script.js ===\n...JS completo...\nHTML deve linkar styles.css e script.js, ser mobile-first, semântico, com SEO, acessível e copy em português do Brasil. CSS deve ser refinado, moderno, responsivo, com variáveis e Google Fonts. JS deve ser puro, seguro e simples. Não faça perguntas em Build: escolha detalhes profissionais coerentes.",
+          "Você é o ForzaAI, um gerador de sites profissional nível Lovable. Gere um site completo e bonito em UMA resposta, sem JSON e sem markdown. O formato obrigatório é exatamente:\n=== index.html ===\n...HTML completo...\n=== styles.css ===\n...CSS completo...\n=== script.js ===\n...JS completo...\nHTML deve linkar styles.css e script.js, ser mobile-first, semântico, com SEO, acessível e copy em português do Brasil. CSS deve ser refinado, moderno, responsivo, com variáveis e Google Fonts. JS deve ser puro, seguro e simples. Não faça perguntas em Build: escolha detalhes profissionais coerentes. Se o briefing pedir IA de estudo/navegador/documentos/PDF/MD/prints/modo professor/pesquisa, entregue uma interface premium e funcional no frontend: leitor de documentos com upload PDF/MD/TXT/imagem, área rolável com indicação de página/seção, botão de print manual que salva múltiplas capturas em localStorage, galeria de prints usados como contexto, chat de estudo, alternância Modo Professor e Modo Pesquisa, heurística de baixa confiança que consulta endpoint backend protegido antes de responder, respostas didáticas com resumo, explicação passo a passo, exemplos, exercícios e checagem de entendimento. Nunca exponha chaves; chamadas reais devem apontar para endpoints protegidos /api/ai/chat e /api/research/search com fallback local honesto.",
       },
       { role: "user", content: baseContext },
     ],
@@ -570,14 +926,18 @@ export async function generateReliableSiteFiles(opts: {
   const js = extractDelimitedFile(content, "script.js");
 
   if (!html || !css || !js) {
-    throw new Error("A IA não retornou os 3 arquivos no formato correto. Tente novamente ou use um modelo Pro.");
+    throw new Error(
+      "A IA não retornou os 3 arquivos no formato correto. Tente novamente ou use um modelo Pro.",
+    );
   }
 
   if (!/<html[\s>]/i.test(html)) {
     html = `<!doctype html>\n<html lang="pt-BR">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${opts.project.name}</title>\n  <link rel="stylesheet" href="styles.css" />\n</head>\n<body>\n${html}\n  <script src="script.js"></script>\n</body>\n</html>`;
   }
-  if (!/styles\.css/i.test(html)) html = html.replace(/<\/head>/i, '  <link rel="stylesheet" href="styles.css" />\n</head>');
-  if (!/script\.js/i.test(html)) html = html.replace(/<\/body>/i, '  <script src="script.js"></script>\n</body>');
+  if (!/styles\.css/i.test(html))
+    html = html.replace(/<\/head>/i, '  <link rel="stylesheet" href="styles.css" />\n</head>');
+  if (!/script\.js/i.test(html))
+    html = html.replace(/<\/body>/i, '  <script src="script.js"></script>\n</body>');
 
   return {
     message: "Pronto — gerei seu site completo com HTML, CSS e JavaScript.",
@@ -641,12 +1001,18 @@ export const startGenerationJob = createServerFn({ method: "POST" })
     if (error) throw error;
 
     const engineUrl = getOptionalServerEnv("FORZA_ENGINE_URL")?.trim();
-    const normalizedEngineUrl = engineUrl && !/^https?:\/\//i.test(engineUrl) ? `https://${engineUrl}` : engineUrl;
-    const engineSecret = getOptionalServerEnv("FORZA_ENGINE_SECRET") || getServerEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const normalizedEngineUrl =
+      engineUrl && !/^https?:\/\//i.test(engineUrl) ? `https://${engineUrl}` : engineUrl;
+    const engineSecret =
+      getOptionalServerEnv("FORZA_ENGINE_SECRET") || getServerEnv("SUPABASE_SERVICE_ROLE_KEY");
     const baseUrl = getOptionalServerEnv("URL") || getOptionalServerEnv("DEPLOY_PRIME_URL");
     const backgroundUrls = [
-      ...(normalizedEngineUrl ? [`${normalizedEngineUrl.replace(/\/$/, "")}/generate-site-background`] : []),
-      ...(baseUrl ? [`${baseUrl.replace(/\/$/, "")}/.netlify/functions/generate-site-background`] : []),
+      ...(normalizedEngineUrl
+        ? [`${normalizedEngineUrl.replace(/\/$/, "")}/generate-site-background`]
+        : []),
+      ...(baseUrl
+        ? [`${baseUrl.replace(/\/$/, "")}/.netlify/functions/generate-site-background`]
+        : []),
     ];
     if (backgroundUrls.length === 0) throw new Error("URL do motor de geração não configurada.");
 
@@ -664,11 +1030,14 @@ export const startGenerationJob = createServerFn({ method: "POST" })
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => "");
-          throw new Error(`Motor não aceitou o job (${response.status}): ${errorText.slice(0, 240)}`);
+          throw new Error(
+            `Motor não aceitou o job (${response.status}): ${errorText.slice(0, 240)}`,
+          );
         }
         return job;
       } catch (error) {
-        const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+        const cause =
+          error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
         const message = error instanceof Error ? `${error.message}${cause}` : String(error);
         startupErrors.push(`${backgroundUrl}: ${message}`);
       }
@@ -677,10 +1046,14 @@ export const startGenerationJob = createServerFn({ method: "POST" })
     const message = startupErrors.join(" | ");
     await supabase
       .from("generation_jobs")
-      .update({ status: "failed", stage: "Falhou ao iniciar o motor", error: message, completed_at: new Date().toISOString() })
+      .update({
+        status: "failed",
+        stage: "Falhou ao iniciar o motor",
+        error: message,
+        completed_at: new Date().toISOString(),
+      })
       .eq("id", job.id);
     throw new Error(`Falha ao iniciar o motor de geração: ${message}`);
-
   });
 
 export const getGenerationJob = createServerFn({ method: "POST" })
@@ -689,7 +1062,9 @@ export const getGenerationJob = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { data: job, error } = await context.supabase
       .from("generation_jobs")
-      .select("id, project_id, status, stage, error, files_updated, created_at, updated_at, completed_at")
+      .select(
+        "id, project_id, status, stage, error, files_updated, created_at, updated_at, completed_at",
+      )
       .eq("id", data.jobId)
       .eq("user_id", context.userId)
       .single();
@@ -697,7 +1072,9 @@ export const getGenerationJob = createServerFn({ method: "POST" })
 
     const { data: engineRun } = await context.supabase
       .from("engine_runs")
-      .select("id, status, phase, mode, plan, current_version_id, error, created_at, updated_at, completed_at")
+      .select(
+        "id, status, phase, mode, plan, current_version_id, error, created_at, updated_at, completed_at",
+      )
       .eq("generation_job_id", data.jobId)
       .maybeSingle();
 
@@ -706,7 +1083,9 @@ export const getGenerationJob = createServerFn({ method: "POST" })
       runId
         ? context.supabase
             .from("engine_tasks")
-            .select("id, position, phase, title, description, status, output, error, created_at, updated_at, completed_at")
+            .select(
+              "id, position, phase, title, description, status, output, error, created_at, updated_at, completed_at",
+            )
             .eq("run_id", runId)
             .order("position")
         : Promise.resolve({ data: [] }),
@@ -816,60 +1195,95 @@ export const generateProjectWizard = createServerFn({ method: "POST" })
       .single();
     if (projErr || !project) throw new Error("Projeto não encontrado");
 
+    // Deadline interno: a função server síncrona tem limite rígido de execução
+    // (Lambda síncrona). As 2 chamadas de IA do wizard rodam em PARALELO com
+    // deadline próprio — se o modelo estiver lento, caímos para as heurísticas
+    // locais em vez de derrubar a Lambda ("invalid status code returned from
+    // lambda: 0"). Sem response_format: gateway 9router o trata mal e dobra a
+    // latência; o JSON é extraído com extractJson() de qualquer forma.
+    // 15s + overhead (auth/supabase/cold start) cabe no timeout de 26s
+    // configurado para a função "server" no netlify.toml.
+    const WIZARD_AI_DEADLINE_MS = 15_000;
+
     const fallbackClassification = classifyPromptLocally(data.prompt, project);
+    const fallbackQuestions = contextualQuestions(
+      fallbackClassification.projectKind,
+      fallbackClassification.complexity,
+      data.prompt,
+    );
+
     let classification = fallbackClassification;
+    let wizard = normalizeWizard({
+      shouldAsk: true,
+      summary: fallbackClassification.summary,
+      questions: fallbackQuestions,
+    });
+
     if (model.provider !== "openai-compatible") {
-      try {
-        const classificationText = await fetchAiText(model, {
-          stream: false,
-          temperature: 0.1,
-          response_format: { type: "json_object" },
-          messages: [
-            {
-              role: "system",
-              content:
-                "Você é o classificador de intenção enterprise do ForzaAI. Classifique o pedido para guiar um motor de geração de sites/SaaS. Responda somente JSON com: shouldAsk boolean, projectKind enum landing_page|portfolio|ecommerce|saas|dashboard|internal_tool|other, complexity enum simple|standard|advanced|enterprise, summary curta, missingContext array. Não gere perguntas aqui.",
-            },
-            {
-              role: "user",
-              content: `Projeto: ${project.name}\nTipo atual: ${project.site_type}\nDescrição atual: ${project.description ?? "—"}\nPrompt inicial: ${data.prompt}`,
-            },
-          ],
-        });
-        classification = normalizeClassification(extractJson(classificationText), fallbackClassification);
-      } catch (error) {
-        console.warn("[wizard] classification fallback", error);
+      const [classificationRes, questionsRes] = await Promise.allSettled([
+        fetchAiText(
+          model,
+          {
+            stream: false,
+            temperature: 0.1,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Você é o classificador de intenção enterprise do ForzaAI. Classifique o pedido para guiar um motor de geração de sites/SaaS. Responda somente JSON com: shouldAsk boolean, projectKind enum landing_page|portfolio|ecommerce|saas|dashboard|internal_tool|other, complexity enum simple|standard|advanced|enterprise, summary curta, missingContext array. Não gere perguntas aqui.",
+              },
+              {
+                role: "user",
+                content: `Projeto: ${project.name}\nTipo atual: ${project.site_type}\nDescrição atual: ${project.description ?? "—"}\nPrompt inicial: ${data.prompt}`,
+              },
+            ],
+          },
+          { timeoutMs: WIZARD_AI_DEADLINE_MS },
+        ),
+        fetchAiText(
+          model,
+          {
+            stream: false,
+            temperature: 0.2,
+            messages: [
+              {
+                role: "system",
+                content:
+                  'Você é o wizard anti-burro do ForzaAI. Gere perguntas múltipla escolha altamente específicas para o tipo de projeto. Faça poucas perguntas, mas cada uma deve influenciar diretamente produto, UX, backend, banco, integrações ou copy. Nunca pergunte coisas genéricas sem impacto. Responda somente JSON: {"shouldAsk":true,"summary":"...","questions":[{"id":"q1","question":"...","options":["..."]}]}. Gere de 5 a 9 perguntas, cada uma com 4 opções curtas.',
+              },
+              {
+                role: "user",
+                content: JSON.stringify({
+                  project,
+                  prompt: data.prompt,
+                  classification: fallbackClassification,
+                  fallbackQuestions,
+                }),
+              },
+            ],
+          },
+          { timeoutMs: WIZARD_AI_DEADLINE_MS },
+        ),
+      ]);
+
+      if (classificationRes.status === "fulfilled") {
+        classification = normalizeClassification(
+          extractJson(classificationRes.value),
+          fallbackClassification,
+        );
+      } else {
+        console.warn("[wizard] classification fallback", classificationRes.reason);
+      }
+
+      if (questionsRes.status === "fulfilled") {
+        const modelWizard = normalizeWizard(extractJson(questionsRes.value));
+        if (modelWizard.questions.length >= 4) wizard = modelWizard;
+      } else {
+        console.warn("[wizard] contextual questions fallback", questionsRes.reason);
       }
     }
 
     classification = { ...classification, shouldAsk: true };
-
-    const fallbackQuestions = contextualQuestions(classification.projectKind, classification.complexity, data.prompt);
-    let wizard = normalizeWizard({ shouldAsk: true, summary: classification.summary, questions: fallbackQuestions });
-    if (model.provider !== "openai-compatible") {
-      try {
-        const questionsText = await fetchAiText(model, {
-          stream: false,
-          temperature: 0.2,
-          response_format: { type: "json_object" },
-          messages: [
-            {
-              role: "system",
-              content:
-                "Você é o wizard anti-burro do ForzaAI. Gere perguntas múltipla escolha altamente específicas para o tipo de projeto. Faça poucas perguntas, mas cada uma deve influenciar diretamente produto, UX, backend, banco, integrações ou copy. Nunca pergunte coisas genéricas sem impacto. Responda somente JSON: {\"shouldAsk\":true,\"summary\":\"...\",\"questions\":[{\"id\":\"q1\",\"question\":\"...\",\"options\":[\"...\"]}]}. Gere de 5 a 9 perguntas, cada uma com 4 opções curtas.",
-            },
-            {
-              role: "user",
-              content: JSON.stringify({ project, prompt: data.prompt, classification, fallbackQuestions }),
-            },
-          ],
-        });
-        const modelWizard = normalizeWizard(extractJson(questionsText));
-        if (modelWizard.questions.length >= 4) wizard = modelWizard;
-      } catch (error) {
-        console.warn("[wizard] contextual questions fallback", error);
-      }
-    }
 
     if (wizard.shouldAsk) {
       await supabase.from("project_memory").upsert(
@@ -993,7 +1407,10 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       hasPreviewSnapshot: Boolean(data.previewSnapshot),
     });
 
-    const isBuildRequest = /Modo Build/i.test(data.message) || (!(currentFiles?.length) && /gere|crie|site|landing|portf[oó]lio|p[aá]gina/i.test(data.message));
+    const isBuildRequest =
+      /Modo Build/i.test(data.message) ||
+      (!currentFiles?.length &&
+        /gere|crie|site|landing|portf[oó]lio|p[aá]gina/i.test(data.message));
     let out: { message: string; files: GeneratedFile[] };
 
     if (isBuildRequest) {
@@ -1007,7 +1424,10 @@ export const sendChatMessage = createServerFn({ method: "POST" })
         skillsContext,
       });
       logStage("build-file-generation-done", { files: out.files.length });
-      yield { type: "progress" as const, chars: out.files.reduce((sum, file) => sum + file.content.length, 0) };
+      yield {
+        type: "progress" as const,
+        chars: out.files.reduce((sum, file) => sum + file.content.length, 0),
+      };
     } else {
       yield { type: "status" as const, text: `Chamando ${model.label} (${model.upstreamModel})…` };
       const upstream = await fetchAiCompletion(model, {
@@ -1029,11 +1449,18 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       });
 
       yield { type: "status" as const, text: "Resposta recebida, estruturando arquivos…" };
-      const payload = await upstream.json();
-      const buffer = payload?.choices?.[0]?.message?.content;
+      // Corpo pode vir como SSE do 9router mesmo com stream:false — parseia bruto.
+      const rawText = await upstream.text();
+      const payload = parseGatewayPayload(rawText);
+      const choice = (payload?.choices as Array<Record<string, unknown>> | undefined)?.[0];
+      const message = (choice?.message ?? {}) as Record<string, unknown>;
+      const buffer = [message.content, message.reasoning_content, message.reasoning, choice?.text]
+        .filter((value): value is string => typeof value === "string" && value.trim())
+        .shift();
       logStage("response-loaded", { chars: typeof buffer === "string" ? buffer.length : 0 });
       if (typeof buffer !== "string") {
-        const fallback = "A IA retornou uma resposta inválida agora. Tente novamente em alguns segundos.";
+        const fallback =
+          "A IA retornou uma resposta inválida agora. Tente novamente em alguns segundos.";
         await supabase.from("messages").insert({
           conversation_id: convo.id,
           role: "assistant",

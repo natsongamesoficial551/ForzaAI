@@ -542,7 +542,8 @@ values
   (true, null, 'Sistemas escaláveis', 'Evita decisões difíceis de escalar.', 'Prefira estruturas de código e dados que cresçam sem acoplamento excessivo, mantendo simplicidade e performance.'),
   (true, null, 'Performance extrema', 'Melhora carregamento e fluidez.', 'Otimize CSS, JS e HTML para carregamento rápido, poucas dependências, animações leves e boa responsividade.'),
   (true, null, 'Código limpo', 'Prioriza legibilidade e manutenção.', 'Gere código direto, bem nomeado, sem complexidade desnecessária e com separação clara entre estrutura, estilo e comportamento.'),
-  (true, null, 'Design futurista', 'Aplica estética tecnológica premium.', 'Use estética futurista premium com gradientes elegantes, glassmorphism controlado, contraste forte e detalhes visuais sofisticados sem prejudicar legibilidade.')
+  (true, null, 'Design futurista', 'Aplica estética tecnológica premium.', 'Use estética futurista premium com gradientes elegantes, glassmorphism controlado, contraste forte e detalhes visuais sofisticados sem prejudicar legibilidade.'),
+  (true, null, 'Modo Professor + Pesquisa', 'Transforma IAs de estudo em tutores precisos com pesquisa.', 'Para assistentes de estudo, ative comportamento de professor: diagnostique nível do aluno, explique passo a passo, cite evidências do documento/print, faça perguntas socráticas, crie exemplos e mini-exercícios. Se a confiança estiver baixa, faltar contexto ou a pergunta depender de fato atual/externo, use modo pesquisa via backend protegido antes de responder; se não houver pesquisa disponível, declare a limitação e responda com hipóteses marcadas.')
 on conflict do nothing;
 
 revoke execute on function public.can_access_project(uuid, uuid) from public, anon;
