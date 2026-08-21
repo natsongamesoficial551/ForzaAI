@@ -413,6 +413,57 @@ function retryAfterMs(response, fallbackMs) {
   return fallbackMs;
 }
 
+// Extrai o primeiro objeto JSON balanceado de um corpo que pode ser JSON puro,
+// SSE ("data: {...}\n\ndata: [DONE]") ou JSON colado com sufixo SSE. Retorna null se não achar.
+function parseGatewayPayload(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  // Caso comum: JSON único válido.
+  if (text.startsWith("{")) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      /* segue para parser balanceado */
+    }
+  }
+  // Parser balanceado: varre caractere a caractere rastreando strings/escapes
+  // e profundidade de {}/[]; para no fechamento do objeto de nível 0.
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      if (inString) escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{" || ch === "[") depth++;
+    else if (ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0) {
+        const candidate = text.slice(start, i + 1);
+        try {
+          return JSON.parse(candidate);
+        } catch {
+          break; // objeto de nível 0 malformado — não há nada melhor adiante
+        }
+      }
+    }
+  }
+  return null;
+}
+
 async function fetchAiText(model, body, context = {}) {
   const maxAttempts = 4;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -462,14 +513,21 @@ async function fetchAiText(model, body, context = {}) {
       throw new Error(`Falha no provedor ${model.label} (${response.status}): ${text.slice(0, 240)}`);
     }
 
-    const payload = await response.json();
+    // Alguns gateways (9router) devolvem corpo SSE (text/event-stream) mesmo
+    // com stream:false no request — ex.: "{...json...}data: [DONE]". O parser
+    // abaixo extrai o primeiro objeto JSON balanceado do corpo bruto.
+    const rawText = await response.text();
+    const payload = parseGatewayPayload(rawText);
+    if (!payload) throw new Error(`Resposta ilegível do provedor ${model.label}: corpo não-JSON ou vazio.`);
     const choice = payload?.choices?.[0];
     const message = choice?.message ?? {};
     // Modelos de raciocínio (kilo-auto/stepfun) podem devolver content vazio
-    // com o texto em reasoning_content quando o budget de tokens e curto.
-    const content = [message.content, message.reasoning_content, choice?.text]
-      .filter((value) => typeof value === "string" && value.trim())
-      .join("\n\n");
+    // com o texto em reasoning/reasoning_content quando o budget de tokens é curto.
+    // Prioridade: content; só cai para reasoning quando content vem vazio.
+    const content =
+      [message.content, message.reasoning_content, message.reasoning, choice?.text]
+        .filter((value) => typeof value === "string" && value.trim())
+        .shift() ?? "";
     if (!content.trim()) throw new Error("A IA retornou resposta vazia.");
     return content;
   }
