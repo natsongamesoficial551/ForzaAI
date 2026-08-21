@@ -508,7 +508,11 @@ async function fetchAiText(modelOrModels, body, context = {}) {
         stage: `Forza Engine: ${previous.label} falhou, tentando ${model.label}…`,
       });
     }
-    const maxAttempts = 4;
+    // Com fallback disponível, não insistimos 4x num modelo morto:
+    // 1 tentativa rápida + troca imediata. Só o modelo ÚNICO ganha as
+    // 4 tentativas com backoff (não há para onde trocar).
+    const maxAttempts = models.length > 1 ? 1 : 4;
+    const retryWaitBaseMs = models.length > 1 ? 5_000 : 20_000;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
@@ -537,7 +541,7 @@ async function fetchAiText(modelOrModels, body, context = {}) {
       }
 
       if ((response.status === 429 || response.status === 502 || response.status === 503 || response.status === 504) && attempt < maxAttempts) {
-        const waitMs = retryAfterMs(response, response.status === 429 ? attempt * 30_000 : attempt * 20_000);
+        const waitMs = retryAfterMs(response, response.status === 429 ? attempt * 30_000 : attempt * retryWaitBaseMs);
         const reason = response.status === 429 ? "limite do provedor atingido" : `gateway/timeout do provedor (${response.status})`;
         await updateJob(context.supabase, context.jobId, {
           stage: `Forza Engine: ${reason}; aguardando ${Math.round(waitMs / 1000)}s antes de tentar novamente (${attempt}/${maxAttempts - 1})…`,
