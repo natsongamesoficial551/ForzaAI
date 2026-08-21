@@ -42,7 +42,11 @@ function getEnrichedContract(baseContract) {
   };
 }
 
-const AI_REQUEST_TIMEOUT_MS = 7_200_000;
+// 5 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free;
+// o budget total do engine (ENGINE_TOTAL_BUDGET_MS) fica abaixo dos 15 min
+// que a Netlify permite para background functions.
+const AI_REQUEST_TIMEOUT_MS = 300_000;
+const ENGINE_TOTAL_BUDGET_MS = 13 * 60_000;
 const AI_FETCH_DISPATCHER = new Agent({
   connect: { timeout: 120_000 },
   headersTimeout: AI_REQUEST_TIMEOUT_MS,
@@ -371,7 +375,13 @@ async function routeModel(supabase, modelId) {
 }
 
 function normalizeAiRequestBody(model, body) {
-  const requestBody = { ...body, model: model.upstreamModel };
+  // Modelos free (kilo-auto/stepfun) costumam limitar output por request;
+  // sem max_tokens explícito alguns retornam 503 ou cortam o código no meio.
+  const requestBody = {
+    max_tokens: 16_000,
+    ...body,
+    model: model.upstreamModel,
+  };
   return requestBody;
 }
 
@@ -453,8 +463,14 @@ async function fetchAiText(model, body, context = {}) {
     }
 
     const payload = await response.json();
-    const content = payload?.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || !content.trim()) throw new Error("A IA retornou resposta vazia.");
+    const choice = payload?.choices?.[0];
+    const message = choice?.message ?? {};
+    // Modelos de raciocínio (kilo-auto/stepfun) podem devolver content vazio
+    // com o texto em reasoning_content quando o budget de tokens e curto.
+    const content = [message.content, message.reasoning_content, choice?.text]
+      .filter((value) => typeof value === "string" && value.trim())
+      .join("\n\n");
+    if (!content.trim()) throw new Error("A IA retornou resposta vazia.");
     return content;
   }
   throw new Error(`Limite do provedor ${model.label} atingido. Aguarde alguns minutos ou use outro modelo.`);
@@ -486,7 +502,7 @@ function buildSkillsContext(userSkills) {
 }
 
 function isGatewayError(message) {
-  return /502|504|gateway|timeout|congestionado|instabilidade|não respondeu/i.test(String(message));
+  return /502|503|504|gateway|timeout|timed out|congestionado|instabilidade|unavailable|não respondeu/i.test(String(message));
 }
 
 async function continuaLoop(model, workingFiles, supabase, jobId, extraContext = "", maxAttempts = 8) {
@@ -1025,7 +1041,53 @@ async function ensureConversation(supabase, projectId) {
   return convo;
 }
 
+// Direções visuais distintas: evita que todo site saia com a mesma cara.
+// A direção é escolhida deterministicamente pelo projeto (hash), não aleatoriamente.
+const DESIGN_DIRECTIONS = [
+  {
+    name: "editorial-luxo",
+    brief: "Estética editorial de luxo: tipografia serifada display (Playfair Display/Fraunces) + sans leve, paleta creme + carvão + dourado queimado, muito respiro, linhas finas, números grandes, grid assimétrico 7/5.",
+  },
+  {
+    name: "dark-tech",
+    brief: "Dark tech premium: fundo quase-preto com gradientes radiais sutis, acento verde-limão ou ciano elétrico, glassmorphism discreto nos cards, tipografia geométrica (Space Grotesk), grid técnico com bordas 1px e micro-animações de glow.",
+  },
+  {
+    name: "brutal-organico",
+    brief: "Neo-brutalismo orgânico: cores sólidas vibrantes (terracota, mostarda, verde-oliva), bordas pretas 2-3px, sombras duras deslocadas, tipografia grotesca pesada, seções com rotação sutil (-1 a 1 grau) e formas SVG blob.",
+  },
+  {
+    name: "minimal-nordico",
+    brief: "Minimalismo nórdico: fundo branco-gelo, muito whitespace, paleta com um único acento (azul gelo ou grafite), tipografia humanista, sombras difusas suaves, ritmo vertical calmo.",
+  },
+  {
+    name: "retro-futurista",
+    brief: "Retro-futurismo 80s refinado: gradiente sunset (magenta→laranja→índigo), grid de linhas em perspectiva no hero, tipografia mono para labels/dados + display bold nos títulos, cards com bordas duplas, scanlines sutis via CSS.",
+  },
+  {
+    name: "corporate-moderno",
+    brief: "Corporate moderno confiável: azul-profundo + branco + acento coral, hero dividido com card flutuante de métricas, seções alternando fundo claro/escuro, contadores animados, Inter com pesos contrastados.",
+  },
+  {
+    name: "organico-natural",
+    brief: "Orgânico natural: tons terrosos e folhagem, texturas de papel via gradiente CSS, formas orgânicas SVG (folhas/ondas) separando seções, tipografia arredondada amigável, cards com cantos assimétricos.",
+  },
+  {
+    name: "vitrine-noturna",
+    brief: "Vitrine noturna elegante: fundo grafite escuro com spotlights radiais dourados, tipografia fina com letter-spacing largo, produtos em vitrine com hover de elevação e brilho, detalhes em linhas douradas finas.",
+  },
+];
+
+function pickDesignDirection(project) {
+  const seed = String(project?.id || project?.name || "forza");
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  return DESIGN_DIRECTIONS[hash % DESIGN_DIRECTIONS.length];
+}
+
 async function runEngine(supabase, job, model, project, currentFiles, skillsContext) {
+  const engineStartedAt = Date.now();
+  const remainingBudgetMs = () => ENGINE_TOTAL_BUDGET_MS - (Date.now() - engineStartedAt);
   const mode = currentFiles?.length ? "edit" : "full_stack";
   const { data: run, error: runError } = await supabase
     .from("engine_runs")
@@ -1044,37 +1106,67 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
 
   try {
     await setPhase(supabase, job.id, run.id, "generation", "Forza Engine: gerando site…");
-    const contract = deliveryContract(project, job, { productPlan: {}, technicalPlan: {} });
-    const content = await fetchAiText(model, {
-      stream: false,
-      temperature: 0.1,
-      messages: [
-        {
-          role: "system",
-          content: `Você é o gerador do ForzaAI. Gere um site completo em UMA resposta. Retorne SOMENTE:
-=== index.html ===
-HTML completo
-=== styles.css ===
-CSS completo
-=== script.js ===
-JavaScript completo
+    const typeRequirements = projectTypeRequirements(project, job);
+    const direction = pickDesignDirection(project);
+    const designBrief = `DIREÇÃO VISUAL OBRIGATÓRIA (${direction.name}): ${direction.brief}\nEssa direção foi escolhida especificamente para este projeto; não use um layout genérico de template.`;
 
-Obrigatório: site completo e publicável com conteúdo real, hero no topo com título + CTA, mínimo 6 seções, CSS responsivo, JS funcional para formulários/navegação/FAQ. Copy em português do Brasil. Zero eval, zero segredos.`,
-        },
-        {
-          role: "user",
-          content: `Projeto: ${project.name}
+    const requestContext = `Projeto: ${project.name}
 Tipo: ${project.site_type}
 Descrição: ${project.description ?? "—"}
 Pedido: ${job.message}
-${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}`,
-        },
-      ],
-    }, { supabase, jobId: job.id });
+Tipo inferido: ${typeRequirements.type}
+Seções obrigatórias: ${typeRequirements.required_sections.join(", ")}
+${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}`;
 
-    let files = normalizeGeneratedFiles(content, project.name);
-    if (!files) {
-      const continued = await continuaLoop(model, [], supabase, job.id, `Gere o site: ${project.name}`);
+    // Geração arquivo por arquivo: 3 chamadas menores em vez de 1 gigante.
+    // Modelos free (kilo-auto/stepfun) retornam 503 quando pedimos os 3
+    // arquivos numa resposta só; 8-16k tokens por arquivo passam sem erro.
+    const stages = [
+      {
+        key: "index.html",
+        stage: "Forza Engine: gerando HTML…",
+        system: `Você é o gerador de sites premium do ForzaAI. Gere APENAS o conteúdo do index.html completo (sem markdown, sem cercas de código, sem explicação). ${designBrief}\nRegras: site completo e publicável, hero no topo com título + subtítulo + 2 CTAs + apoio visual, mínimo ${typeRequirements.minimums.sections} seções reais (${typeRequirements.required_sections.join(", ")}), semântico (<main>, <section>, <header>, <footer>), links para styles.css e script.js, copy específica em português do Brasil com pelo menos ${typeRequirements.minimums.visibleText} caracteres visíveis, ${typeRequirements.minimums.cards}+ cards/itens, zero placeholders/TODO/lorem. NÃO inclua <style> nem <script> inline — todo CSS vai em styles.css e todo JS em script.js. ${typeRequirements.checklist}`,
+      },
+      {
+        key: "styles.css",
+        stage: "Forza Engine: gerando CSS…",
+        system: `Você é o designer CSS do ForzaAI. Recebe o HTML já gerado e produz APENAS o conteúdo do styles.css completo (sem markdown, sem explicação). ${designBrief}\nRegras: CSS robusto com variáveis (:root), tipografia Google Fonts (via @import), layout com Grid/Flexbox, estados hover/focus/active, micro-interações, transições suaves, responsivo com @media para tablet (768px) e mobile (480px), no mínimo ${typeRequirements.minimums.cssRules} regras, primeira dobra visualmente densa (sem área branca dominante), acessibilidade (contraste, focus-visible). Estilize TODAS as classes/ids presentes no HTML.`,
+      },
+      {
+        key: "script.js",
+        stage: "Forza Engine: gerando JavaScript…",
+        system: `Você é o desenvolvedor JS do ForzaAI. Recebe o HTML já gerado e produz APENAS o conteúdo do script.js completo (sem markdown, sem explicação). Regras: JS puro sem dependências, sem eval, sem innerHTML com dados variáveis, sem segredos. Implemente comportamento real para TODO elemento interativo do HTML: menu mobile, navegação âncora suave, tabs, FAQ accordion, formulários com validação + feedback de sucesso/erro simulado, carrinho quando existir, revelação on-scroll via IntersectionObserver. Use defer-safe (DOMContentLoaded ou script no fim). Compatível com as classes/ids do HTML fornecido.`,
+      },
+    ];
+
+    let html = "";
+    let css = "";
+    let js = "";
+
+    for (const stage of stages) {
+      if (remainingBudgetMs() < 90_000) throw new Error("Tempo do motor esgotado antes de completar todos os arquivos.");
+      await updateJob(supabase, job.id, { stage: stage.stage });
+      const contextFiles = stage.key === "index.html" ? "" : `\n\nHTML já gerado (estilize/programe exatamente essas marcações):\n${html}`;
+      const content = await fetchAiText(model, {
+        stream: false,
+        temperature: stage.key === "index.html" ? 0.8 : 0.4,
+        messages: [
+          { role: "system", content: stage.system },
+          { role: "user", content: `${requestContext}${contextFiles}` },
+        ],
+      }, { supabase, jobId: job.id });
+      if (stage.key === "index.html") html = content;
+      else if (stage.key === "styles.css") css = content;
+      else js = content;
+      await saveArtifact(supabase, run.id, "model_raw_output", { stage: stage.key, content: content.slice(0, 120_000) });
+    }
+
+    let files = normalizeGeneratedFiles(
+      `=== index.html ===\n${html}\n=== styles.css ===\n${css}\n=== script.js ===\n${js}`,
+      project.name,
+    );
+    if (!files || !files[0]?.content?.trim()) {
+      const continued = await continuaLoop(model, files ?? [], supabase, job.id, `Gere o site: ${project.name}`);
       files = continued;
     }
 
@@ -1083,7 +1175,15 @@ ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}
 
     if (structuralReport.blocking.length) {
       await updateJob(supabase, job.id, { stage: "Forza Engine: reparando…" });
-      files = await repairFilesForQuality(supabase, model, run, job, project, { productPlan: {}, technicalPlan: {} }, files, structuralReport);
+      try {
+        files = await repairFilesForQuality(supabase, model, run, job, project, { productPlan: {}, technicalPlan: {} }, files, structuralReport);
+      } catch (repairError) {
+        // Reparo é best-effort: se o modelo estiver instável aqui, salvamos o
+        // que foi gerado em vez de matar o job inteiro.
+        const msg = repairError instanceof Error ? repairError.message : String(repairError);
+        console.error("[forza engine] repair failed, keeping generated files", repairError);
+        await saveArtifact(supabase, run.id, "repair_error", { error: msg });
+      }
     }
 
     await setPhase(supabase, job.id, run.id, "finalize", "Forza Engine: salvando…");
