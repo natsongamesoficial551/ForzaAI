@@ -374,6 +374,37 @@ async function routeModel(supabase, modelId) {
   };
 }
 
+// Lista os modelos habilitados em ordem de prioridade (o preferido primeiro,
+// depois os demais). Usado para fallback automático quando o modelo primário
+// está congestionado/offline no 9router — em vez de falhar o job inteiro.
+async function listEnabledModels(supabase, preferredModelId) {
+  const preferred = MODEL_IDS.has(preferredModelId) ? preferredModelId : "forza-1-flash";
+  const { data: settings } = await supabase
+    .from("ai_provider_settings")
+    .select("forza_model_id, provider, label, endpoint, upstream_model, api_key, requires_subscription, credit_multiplier, is_enabled")
+    .eq("is_enabled", true)
+    .order("forza_model_id");
+  const fallbackKey = process.env["9ROUTER_API_KEY"];
+  const models = (settings ?? [])
+    .filter((setting) => setting.api_key || fallbackKey)
+    .map((setting) => ({
+      id: setting.forza_model_id,
+      label: setting.label,
+      provider: "9router",
+      endpoint: setting.endpoint,
+      upstreamModel: setting.upstream_model,
+      apiKey: setting.api_key || fallbackKey,
+      creditMultiplier: Number(setting.credit_multiplier || 1),
+    }));
+  const primaryIndex = models.findIndex((model) => model.id === preferred);
+  if (primaryIndex === -1) {
+    if (!models.length) throw new Error(`Nenhum modelo habilitado no 9router para fallback.`);
+    return models;
+  }
+  const [primary] = models.splice(primaryIndex, 1);
+  return [primary, ...models];
+}
+
 function normalizeAiRequestBody(model, body) {
   // Modelos free (kilo-auto/stepfun) costumam limitar output por request;
   // sem max_tokens explícito alguns retornam 503 ou cortam o código no meio.
@@ -464,74 +495,116 @@ function parseGatewayPayload(raw) {
   return null;
 }
 
-async function fetchAiText(model, body, context = {}) {
-  const maxAttempts = 4;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
-    let response;
-    try {
-      const endpointUrl = resolveEndpoint(model.endpoint);
-      response = await fetch(endpointUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${model.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        signal: controller.signal,
-        dispatcher: AI_FETCH_DISPATCHER,
-        body: JSON.stringify(normalizeAiRequestBody(model, body)),
-      });
-    } catch (error) {
-      if (error?.name === "AbortError") {
-        throw new Error(`O provedor ${model.label} demorou mais de ${Math.round(AI_REQUEST_TIMEOUT_MS / 1000)}s para responder. Esse modelo pode estar congestionado; use um modelo menor/mais rápido para gerar site completo.`);
-      }
-      throw new Error(`Falha de conexão com o provedor ${model.label} em ${resolveEndpoint(model.endpoint)}: ${describeFetchFailure(error)}. Confira endpoint, rede da hospedagem e se o modelo upstream "${model.upstreamModel}" existe na API.`);
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if ((response.status === 429 || response.status === 502 || response.status === 503 || response.status === 504) && attempt < maxAttempts) {
-      const waitMs = retryAfterMs(response, response.status === 429 ? attempt * 30_000 : attempt * 20_000);
-      const reason = response.status === 429 ? "limite do provedor atingido" : `gateway/timeout do provedor (${response.status})`;
+async function fetchAiText(modelOrModels, body, context = {}) {
+  // Aceita um único modelo ou uma lista ordenada (fallback automático):
+  // se o modelo primário falhar com gateway/timeout, tenta o próximo.
+  const models = Array.isArray(modelOrModels) ? modelOrModels : [modelOrModels];
+  const errors = [];
+  for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
+    const model = models[modelIndex];
+    if (modelIndex > 0) {
+      const previous = models[modelIndex - 1];
       await updateJob(context.supabase, context.jobId, {
-        stage: `Forza Engine: ${reason}; aguardando ${Math.round(waitMs / 1000)}s antes de tentar novamente (${attempt}/${maxAttempts - 1})…`,
+        stage: `Forza Engine: ${previous.label} falhou, tentando ${model.label}…`,
       });
-      await sleep(waitMs);
-      continue;
     }
+    const maxAttempts = 4;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+      let response;
+      try {
+        const endpointUrl = resolveEndpoint(model.endpoint);
+        response = await fetch(endpointUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${model.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          signal: controller.signal,
+          dispatcher: AI_FETCH_DISPATCHER,
+          body: JSON.stringify(normalizeAiRequestBody(model, body)),
+        });
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          errors.push(`${model.label}: timeout de ${Math.round(AI_REQUEST_TIMEOUT_MS / 1000)}s`);
+          break; // timeout longo não melhora trocando de modelo; pula
+        }
+        errors.push(`${model.label}: ${describeFetchFailure(error)}`);
+        break; // falha de conexão local — modelo não vai resolver
+      } finally {
+        clearTimeout(timeout);
+      }
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      if (response.status === 401 || response.status === 403) throw new Error(`Falha de autenticação no provedor ${model.label}: confira a API key e o provider selecionado.`);
-      if (response.status === 402) throw new Error(`Créditos esgotados no provedor ${model.label}.`);
-      if (response.status === 400) throw new Error(`Configuração inválida no provedor ${model.label}: confira endpoint, parâmetros e se o modelo upstream "${model.upstreamModel}" existe. Detalhe: ${text.slice(0, 240)}`);
-      if (response.status === 404) throw new Error(`Modelo não encontrado no provedor ${model.label}: confira o modelo upstream "${model.upstreamModel}".`);
-      if (response.status === 405) throw new Error(`Método não permitido no provedor ${model.label} (405). O endpoint precisa terminar com /chat/completions. Configure assim: http://10.42.0.85:20128/v1 (o motor completa o caminho automaticamente).`);
-      if (response.status === 429) throw new Error(`Limite do provedor ${model.label} atingido mesmo após ${maxAttempts - 1} tentativas. Aguarde alguns minutos ou use outro modelo.`);
-      if (response.status === 502 || response.status === 503 || response.status === 504 || /bad gateway|gateway timeout|<html/i.test(text)) throw new Error(`O provedor ${model.label} retornou gateway/instabilidade (${response.status}) mesmo após ${maxAttempts - 1} tentativas. Isso costuma ser falha upstream ou congestionamento do modelo "${model.upstreamModel}"; tente novamente ou use um modelo menor. Detalhe: ${text.replace(/\s+/g, " ").slice(0, 180)}`);
-      throw new Error(`Falha no provedor ${model.label} (${response.status}): ${text.slice(0, 240)}`);
+      if ((response.status === 429 || response.status === 502 || response.status === 503 || response.status === 504) && attempt < maxAttempts) {
+        const waitMs = retryAfterMs(response, response.status === 429 ? attempt * 30_000 : attempt * 20_000);
+        const reason = response.status === 429 ? "limite do provedor atingido" : `gateway/timeout do provedor (${response.status})`;
+        await updateJob(context.supabase, context.jobId, {
+          stage: `Forza Engine: ${reason}; aguardando ${Math.round(waitMs / 1000)}s antes de tentar novamente (${attempt}/${maxAttempts - 1})…`,
+        });
+        await sleep(waitMs);
+        continue;
+      }
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        const detail = text.replace(/\s+/g, " ").slice(0, 240);
+        if (response.status === 401 || response.status === 403) {
+          errors.push(`${model.label}: falha de autenticação (confira API key/provider)`);
+          break; // config problem — não adianta trocar de modelo
+        }
+        if (response.status === 402) {
+          errors.push(`${model.label}: créditos esgotados`);
+          break;
+        }
+        if (response.status === 400) {
+          errors.push(`${model.label}: configuração inválida — ${detail}`);
+          break;
+        }
+        if (response.status === 404) {
+          errors.push(`${model.label}: modelo upstream "${model.upstreamModel}" não encontrado — ${detail}`);
+          break;
+        }
+        if (response.status === 429) {
+          errors.push(`${model.label}: limite atingido mesmo após ${maxAttempts - 1} tentativas`);
+          break;
+        }
+        if (response.status === 502 || response.status === 503 || response.status === 504 || /bad gateway|gateway timeout|<html/i.test(text)) {
+          errors.push(`${model.label}: gateway/instabilidade (${response.status}) — ${detail}`);
+          break; // gateway instável: trocar de modelo pode resolver
+        }
+        errors.push(`${model.label}: falha (${response.status}) — ${detail}`);
+        break;
+      }
+
+      // Alguns gateways (9router) devolvem corpo SSE (text/event-stream) mesmo
+      // com stream:false no request — ex.: "{...json...}data: [DONE]". O parser
+      // abaixo extrai o primeiro objeto JSON balanceado do corpo bruto.
+      const rawText = await response.text();
+      const payload = parseGatewayPayload(rawText);
+      if (!payload) {
+        errors.push(`${model.label}: resposta ilegível (corpo não-JSON ou vazio)`);
+        break;
+      }
+      const choice = payload?.choices?.[0];
+      const message = choice?.message ?? {};
+      // Modelos de raciocínio (kilo-auto/stepfun) podem devolver content vazio
+      // com o texto em reasoning/reasoning_content quando o budget de tokens é curto.
+      // Prioridade: content; só cai para reasoning quando content vem vazio.
+      const content =
+        [message.content, message.reasoning_content, message.reasoning, choice?.text]
+          .filter((value) => typeof value === "string" && value.trim())
+          .shift() ?? "";
+      if (!content.trim()) {
+        errors.push(`${model.label}: resposta vazia`);
+        break;
+      }
+      return content;
     }
-
-    // Alguns gateways (9router) devolvem corpo SSE (text/event-stream) mesmo
-    // com stream:false no request — ex.: "{...json...}data: [DONE]". O parser
-    // abaixo extrai o primeiro objeto JSON balanceado do corpo bruto.
-    const rawText = await response.text();
-    const payload = parseGatewayPayload(rawText);
-    if (!payload) throw new Error(`Resposta ilegível do provedor ${model.label}: corpo não-JSON ou vazio.`);
-    const choice = payload?.choices?.[0];
-    const message = choice?.message ?? {};
-    // Modelos de raciocínio (kilo-auto/stepfun) podem devolver content vazio
-    // com o texto em reasoning/reasoning_content quando o budget de tokens é curto.
-    // Prioridade: content; só cai para reasoning quando content vem vazio.
-    const content =
-      [message.content, message.reasoning_content, message.reasoning, choice?.text]
-        .filter((value) => typeof value === "string" && value.trim())
-        .shift() ?? "";
-    if (!content.trim()) throw new Error("A IA retornou resposta vazia.");
-    return content;
   }
-  throw new Error(`Limite do provedor ${model.label} atingido. Aguarde alguns minutos ou use outro modelo.`);
+  throw new Error(
+    `Nenhum modelo respondeu: ${errors.join(" | ") || "sem detalhes"}. Aguarde alguns minutos ou ajuste os modelos no Admin.`,
+  );
 }
 
 async function fetchJson(model, messages, fallback, context = {}) {
@@ -1290,7 +1363,8 @@ export default async (request) => {
       .single();
     if (jobError || !job) throw jobError ?? new Error("Job não encontrado");
 
-    const model = await routeModel(supabase, job.model_id);
+    const models = await listEnabledModels(supabase, job.model_id);
+    const model = models[0];
     const creditCost = Math.ceil(model.creditMultiplier || 1);
 
     const { data: project, error: projectError } = await supabase
@@ -1304,7 +1378,7 @@ export default async (request) => {
     const { data: skillsData } = await supabase.from("project_skill_activations").select("ai_skills(name, description, prompt)").eq("project_id", job.project_id);
     const skillsContext = (skillsData ?? []).map((row) => row.ai_skills).filter(Boolean).map((skill) => `Skill: ${skill.name}\nDescrição: ${skill.description}\nInstrução: ${skill.prompt}`).join("\n\n");
 
-    const { run, files, version, validationReport } = await runEngine(supabase, job, model, project, currentFiles ?? [], skillsContext);
+    const { run, files, version, validationReport } = await runEngine(supabase, job, models, project, currentFiles ?? [], skillsContext);
 
     const { data: debited, error: debitError } = await supabase.rpc("debit_project_owner_credits", {
       _project_id: job.project_id,
