@@ -1,5 +1,5 @@
 import http from "node:http";
-import engineHandler from "./netlify/functions/generate-site-background.mjs";
+import engineHandler, { ENGINE_VERSION } from "./netlify/functions/generate-site-background.mjs";
 
 const port = Number(process.env.PORT || 3000);
 const autoPingUrl = process.env.AUTO_PING;
@@ -23,7 +23,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
-      send(res, 200, { ok: true, service: "forza-engine" });
+      send(res, 200, { ok: true, service: "forza-engine", version: ENGINE_VERSION });
       return;
     }
 

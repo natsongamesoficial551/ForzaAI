@@ -42,6 +42,10 @@ function getEnrichedContract(baseContract) {
   };
 }
 
+// Versão do engine: exposta no /health do Render e no primeiro stage do job,
+// para identificar qual versão está de fato rodando em produção.
+export const ENGINE_VERSION = "2.1.0-sse";
+
 // 10 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free,
 // mas provedores/gateways (9router) podem ficar bem mais lentos em pico.
 // O budget total do engine (ENGINE_TOTAL_BUDGET_MS) fica abaixo dos 15 min
@@ -1409,7 +1413,7 @@ export default async (request) => {
   });
 
   try {
-    await updateJob(supabase, jobId, { status: "running", stage: "Forza Engine: carregando projeto…" });
+    await updateJob(supabase, jobId, { status: "running", stage: `Forza Engine v${ENGINE_VERSION}: carregando projeto…` });
     const { data: job, error: jobError } = await supabase
       .from("generation_jobs")
       .select("id, project_id, user_id, model_id, message")
