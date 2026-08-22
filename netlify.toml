@@ -7,7 +7,7 @@
   NODE_VERSION = "22"
 
 [functions."server"]
-  timeout = 26
+  timeout = 60
 
 [[redirects]]
   from = "/*"

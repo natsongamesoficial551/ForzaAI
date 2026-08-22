@@ -470,10 +470,10 @@ function Workspace() {
           () =>
             reject(
               new Error(
-                "A geração demorou demais. A hospedagem pode encerrar requests muito longas; tente novamente ou escolha um modelo mais rápido.",
+                "A geração demorou demais. A hospedagem encerra requests muito longas; use anexos menores ou escolha um modelo mais rápido. Para ajustes simples, prefira enviar sem anexos.",
               ),
             ),
-          260_000,
+          60_000,
         );
       });
       const request = async () => {

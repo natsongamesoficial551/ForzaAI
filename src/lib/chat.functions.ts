@@ -720,7 +720,9 @@ function aiHeaders(model: RoutedAiModel) {
   };
 }
 
-const AI_REQUEST_TIMEOUT_MS = 240_000;
+// Alinhado ao timeout de 60s da função "server" no netlify.toml: dispara o abort
+// um pouco antes para retornar mensagem clara ao usuário em vez de erro de gateway.
+const AI_REQUEST_TIMEOUT_MS = 55_000;
 
 function normalizeAiRequestBody(model: RoutedAiModel, body: Record<string, unknown>) {
   const requestBody = { ...body, model: model.upstreamModel };
@@ -767,7 +769,10 @@ async function fetchAiCompletion(
       method: "POST",
       headers: aiHeaders(model),
       signal: controller.signal,
-      body: JSON.stringify(normalizeAiRequestBody(model, body)),
+      // stream:true força o gateway a transmitir chunks contínuos. Sem isso,
+      // o Cloudflare na frente do 9router corta com 524 (~100s sem bytes) em
+      // respostas longas, antes de o modelo terminar de gerar.
+      body: JSON.stringify(normalizeAiRequestBody(model, { ...body, stream: true })),
     });
   } catch (error) {
     console.error("[AI generation] fetch-error", {
@@ -869,25 +874,62 @@ function parseGatewayPayload(raw: unknown): Record<string, unknown> | null {
   return null;
 }
 
+// Lê a resposta da IA de forma agnóstica ao transporte: com stream:true o
+// gateway envia chunks SSE contínuos (evita o 524 do Cloudflare em respostas
+// longas); também aceita corpo JSON puro de gateways sem streaming.
+// Prioriza content; cai para reasoning_* quando o content vem vazio.
+export async function readUpstreamContent(upstream: Response): Promise<string | null> {
+  const raw = await upstream.text();
+  const contentType = upstream.headers.get("content-type") || "";
+  const looksSse = /text\/event-stream/i.test(contentType) || /(^|\n)\s*data:/.test(raw);
+  if (!looksSse) {
+    const payload = parseGatewayPayload(raw);
+    if (!payload) return null;
+    const choice = (payload.choices as Array<Record<string, unknown>> | undefined)?.[0];
+    const message = (choice?.message ?? {}) as Record<string, unknown>;
+    return (
+      [message.content, message.reasoning_content, message.reasoning, choice?.text]
+        .filter((value): value is string => typeof value === "string" && value.trim())
+        .shift() ?? null
+    );
+  }
+  let content = "";
+  let reasoning = "";
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+    let parsed: { choices?: Array<Record<string, unknown>> };
+    try {
+      parsed = JSON.parse(data) as { choices?: Array<Record<string, unknown>> };
+    } catch {
+      continue; // chunk malformado — ignora e segue o stream
+    }
+    const choice = parsed.choices?.[0];
+    const delta = (choice?.delta ?? {}) as Record<string, unknown>;
+    const message = (choice?.message ?? {}) as Record<string, unknown>;
+    for (const holder of [delta, message]) {
+      if (typeof holder.content === "string") content += holder.content;
+      if (typeof holder.reasoning_content === "string") reasoning += holder.reasoning_content;
+      if (typeof holder.reasoning === "string") reasoning += holder.reasoning;
+    }
+    if (typeof choice?.text === "string") content += choice.text;
+  }
+  const finalContent = content.trim() ? content : reasoning;
+  return finalContent.trim() ? finalContent : null;
+}
+
 export async function fetchAiText(
   model: RoutedAiModel,
   body: Record<string, unknown>,
   options: { timeoutMs?: number } = {},
 ) {
-  const upstream = await fetchAiCompletion(model, body, options);
-  const rawText = await upstream.text();
-  const payload = parseGatewayPayload(rawText);
-  if (!payload) throw new Error("Resposta ilegível do provedor: corpo não-JSON ou vazio.");
-  const choice = (payload.choices as Array<Record<string, unknown>> | undefined)?.[0];
-  const message = (choice?.message ?? {}) as Record<string, unknown>;
-  // Modelos de raciocínio podem devolver content vazio com o texto em
-  // reasoning/reasoning_content quando o budget de tokens é curto.
-  const content =
-    [message.content, message.reasoning_content, message.reasoning, choice?.text]
-      .filter((value) => typeof value === "string" && value.trim())
-      .shift() ?? "";
-  if (!content.trim()) throw new Error("A IA retornou uma resposta vazia. Tente novamente.");
-  return content as string;
+  const content = await readUpstreamContent(await fetchAiCompletion(model, body, options));
+  if (!content) {
+    throw new Error("Resposta ilegível ou vazia do provedor. Tente novamente em alguns segundos.");
+  }
+  return content;
 }
 
 function extractDelimitedFile(text: string, path: GeneratedFile["path"]) {
@@ -909,7 +951,6 @@ export async function generateReliableSiteFiles(opts: {
   const baseContext = `Projeto: ${opts.project.name} (${opts.project.site_type})\nDescrição: ${opts.project.description ?? "—"}${opts.skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${opts.skillsContext}` : ""}\n\nArquivos atuais:\n${opts.filesContext}\n\nPedido do usuário:\n${opts.userBrief}`;
 
   const content = await fetchAiText(opts.model, {
-    stream: false,
     temperature: 0.2,
     messages: [
       {
@@ -1017,7 +1058,13 @@ export const startGenerationJob = createServerFn({ method: "POST" })
     if (backgroundUrls.length === 0) throw new Error("URL do motor de geração não configurada.");
 
     const startupErrors: string[] = [];
+    // Timeout por tentativa: o engine (ex.: Render free) pode ter cold start de
+    // 30-50s; com 2 URLs de fallback, o total fica abaixo do limite da função
+    // server (60s). Evita o job ficar preso em "queued" sem resposta.
+    const ENGINE_START_TIMEOUT_MS = 45_000;
     for (const backgroundUrl of backgroundUrls) {
+      const controller = new AbortController();
+      const startupTimeout = setTimeout(() => controller.abort(), ENGINE_START_TIMEOUT_MS);
       try {
         const response = await fetch(backgroundUrl, {
           method: "POST",
@@ -1025,6 +1072,7 @@ export const startGenerationJob = createServerFn({ method: "POST" })
             "Content-Type": "application/json",
             "x-generation-secret": engineSecret,
           },
+          signal: controller.signal,
           body: JSON.stringify({ jobId: job.id }),
         });
 
@@ -1036,10 +1084,19 @@ export const startGenerationJob = createServerFn({ method: "POST" })
         }
         return job;
       } catch (error) {
+        const isAbort =
+          error instanceof Error &&
+          (error.name === "AbortError" || /abort/i.test(error.message));
+        const detail = isAbort
+          ? `timeout de ${ENGINE_START_TIMEOUT_MS / 1000}s sem resposta (engine dormindo ou lento)`
+          : error instanceof Error
+            ? error.message
+            : String(error);
         const cause =
           error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
-        const message = error instanceof Error ? `${error.message}${cause}` : String(error);
-        startupErrors.push(`${backgroundUrl}: ${message}`);
+        startupErrors.push(`${backgroundUrl}: ${detail}${cause}`);
+      } finally {
+        clearTimeout(startupTimeout);
       }
     }
 
@@ -1431,7 +1488,6 @@ export const sendChatMessage = createServerFn({ method: "POST" })
     } else {
       yield { type: "status" as const, text: `Chamando ${model.label} (${model.upstreamModel})…` };
       const upstream = await fetchAiCompletion(model, {
-        stream: false,
         temperature: 0.3,
         response_format: { type: "json_object" },
         messages: [
@@ -1449,14 +1505,9 @@ export const sendChatMessage = createServerFn({ method: "POST" })
       });
 
       yield { type: "status" as const, text: "Resposta recebida, estruturando arquivos…" };
-      // Corpo pode vir como SSE do 9router mesmo com stream:false — parseia bruto.
-      const rawText = await upstream.text();
-      const payload = parseGatewayPayload(rawText);
-      const choice = (payload?.choices as Array<Record<string, unknown>> | undefined)?.[0];
-      const message = (choice?.message ?? {}) as Record<string, unknown>;
-      const buffer = [message.content, message.reasoning_content, message.reasoning, choice?.text]
-        .filter((value): value is string => typeof value === "string" && value.trim())
-        .shift();
+      // Corpo chega como stream SSE (stream:true forçado no fetch) — o helper
+      // acumula os deltas e devolve o conteúdo final.
+      const buffer = await readUpstreamContent(upstream);
       logStage("response-loaded", { chars: typeof buffer === "string" ? buffer.length : 0 });
       if (typeof buffer !== "string") {
         const fallback =

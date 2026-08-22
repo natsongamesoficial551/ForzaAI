@@ -42,13 +42,14 @@ function getEnrichedContract(baseContract) {
   };
 }
 
-// 5 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free;
-// o budget total do engine (ENGINE_TOTAL_BUDGET_MS) fica abaixo dos 15 min
+// 10 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free,
+// mas provedores/gateways (9router) podem ficar bem mais lentos em pico.
+// O budget total do engine (ENGINE_TOTAL_BUDGET_MS) fica abaixo dos 15 min
 // que a Netlify permite para background functions.
-const AI_REQUEST_TIMEOUT_MS = 300_000;
-const ENGINE_TOTAL_BUDGET_MS = 13 * 60_000;
+const AI_REQUEST_TIMEOUT_MS = 600_000;
+const ENGINE_TOTAL_BUDGET_MS = 14 * 60_000;
 const AI_FETCH_DISPATCHER = new Agent({
-  connect: { timeout: 120_000 },
+  connect: { timeout: 300_000 },
   headersTimeout: AI_REQUEST_TIMEOUT_MS,
   bodyTimeout: AI_REQUEST_TIMEOUT_MS,
 });
@@ -507,6 +508,50 @@ function parseGatewayPayload(raw) {
   return null;
 }
 
+// Lê a resposta da IA de forma agnóstica ao transporte: com stream:true o
+// gateway (9router/Cloudflare) envia chunks SSE contínuos — isso evita o erro
+// 524 do Cloudflare, que corta respostas longas quando nada é transmitido por
+// ~100s. Também aceita corpo JSON puro (fallback de gateways sem streaming).
+async function readAiResponseContent(response) {
+  const raw = await response.text();
+  const contentType = response.headers.get("content-type") || "";
+  const looksSse = /text\/event-stream/i.test(contentType) || /(^|\n)\s*data:/.test(raw);
+  if (!looksSse) {
+    const payload = parseGatewayPayload(raw);
+    if (!payload) return null;
+    const choice = payload?.choices?.[0];
+    const message = choice?.message ?? {};
+    return [message.content, message.reasoning_content, message.reasoning, choice?.text]
+      .filter((value) => typeof value === "string" && value.trim())
+      .shift() ?? null;
+  }
+  let content = "";
+  let reasoning = "";
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      continue; // chunk malformado — ignora e segue o stream
+    }
+    const choice = parsed?.choices?.[0];
+    const delta = choice?.delta ?? {};
+    const message = choice?.message ?? {};
+    for (const holder of [delta, message]) {
+      if (typeof holder.content === "string") content += holder.content;
+      if (typeof holder.reasoning_content === "string") reasoning += holder.reasoning_content;
+      if (typeof holder.reasoning === "string") reasoning += holder.reasoning;
+    }
+    if (typeof choice?.text === "string") content += choice.text;
+  }
+  const finalContent = content.trim() ? content : reasoning;
+  return finalContent.trim() ? finalContent : null;
+}
+
 async function fetchAiText(modelOrModels, body, context = {}) {
   // Aceita um único modelo ou uma lista ordenada (fallback automático):
   // se o modelo primário falhar com gateway/timeout, tenta o próximo.
@@ -525,11 +570,11 @@ async function fetchAiText(modelOrModels, body, context = {}) {
     // 4 tentativas com backoff (não há para onde trocar).
     const maxAttempts = models.length > 1 ? 1 : 4;
     const retryWaitBaseMs = models.length > 1 ? 5_000 : 20_000;
-    // Timeout por tentativa: quando há fallback, esperar 5 min num modelo
-    // lento queima o budget inteiro (4 modelos x 300s = 20min > 13min da
-    // engine e 15min da Netlify). O gateway 9router corta upstream em ~30s,
-    // então 60s por tentativa é folga suficiente antes de trocar de modelo.
-    const attemptTimeoutMs = models.length > 1 ? 60_000 : AI_REQUEST_TIMEOUT_MS;
+    // Timeout por tentativa: quando há fallback, não vale queimar o budget
+    // inteiro num modelo só. Com stream:true os chunks fluem continuamente,
+    // então o timeout só dispara em stream realmente parado/lento demais:
+    // 120s por modelo x 4 modelos = 8min, dentro do budget de 14min.
+    const attemptTimeoutMs = models.length > 1 ? 120_000 : AI_REQUEST_TIMEOUT_MS;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), attemptTimeoutMs);
@@ -544,7 +589,10 @@ async function fetchAiText(modelOrModels, body, context = {}) {
           },
           signal: controller.signal,
           dispatcher: AI_FETCH_DISPATCHER,
-          body: JSON.stringify(normalizeAiRequestBody(model, body)),
+          // stream:true força o gateway a transmitir chunks contínuos. Sem
+          // isso, o Cloudflare na frente do 9router corta com 524 (~100s sem
+          // bytes enviados) em gerações longas, antes do modelo terminar.
+          body: JSON.stringify(normalizeAiRequestBody(model, { ...body, stream: true })),
         });
       } catch (error) {
         if (error?.name === "AbortError") {
@@ -557,7 +605,7 @@ async function fetchAiText(modelOrModels, body, context = {}) {
         clearTimeout(timeout);
       }
 
-      if ((response.status === 429 || response.status === 502 || response.status === 503 || response.status === 504) && attempt < maxAttempts) {
+      if ((response.status === 429 || response.status === 502 || response.status === 503 || response.status === 504 || response.status === 524) && attempt < maxAttempts) {
         const waitMs = retryAfterMs(response, response.status === 429 ? attempt * 30_000 : attempt * retryWaitBaseMs);
         const reason = response.status === 429 ? "limite do provedor atingido" : `gateway/timeout do provedor (${response.status})`;
         await updateJob(context.supabase, context.jobId, {
@@ -590,7 +638,7 @@ async function fetchAiText(modelOrModels, body, context = {}) {
           errors.push(`${model.label}: limite atingido mesmo após ${maxAttempts - 1} tentativas`);
           break;
         }
-        if (response.status === 502 || response.status === 503 || response.status === 504 || /bad gateway|gateway timeout|<html/i.test(text)) {
+        if (response.status === 502 || response.status === 503 || response.status === 504 || response.status === 524 || /bad gateway|gateway timeout|<html/i.test(text)) {
           errors.push(`${model.label}: gateway/instabilidade (${response.status}) — ${detail}`);
           break; // gateway instável: trocar de modelo pode resolver
         }
@@ -598,26 +646,11 @@ async function fetchAiText(modelOrModels, body, context = {}) {
         break;
       }
 
-      // Alguns gateways (9router) devolvem corpo SSE (text/event-stream) mesmo
-      // com stream:false no request — ex.: "{...json...}data: [DONE]". O parser
-      // abaixo extrai o primeiro objeto JSON balanceado do corpo bruto.
-      const rawText = await response.text();
-      const payload = parseGatewayPayload(rawText);
-      if (!payload) {
-        errors.push(`${model.label}: resposta ilegível (corpo não-JSON ou vazio)`);
-        break;
-      }
-      const choice = payload?.choices?.[0];
-      const message = choice?.message ?? {};
-      // Modelos de raciocínio (kilo-auto/stepfun) podem devolver content vazio
-      // com o texto em reasoning/reasoning_content quando o budget de tokens é curto.
-      // Prioridade: content; só cai para reasoning quando content vem vazio.
-      const content =
-        [message.content, message.reasoning_content, message.reasoning, choice?.text]
-          .filter((value) => typeof value === "string" && value.trim())
-          .shift() ?? "";
-      if (!content.trim()) {
-        errors.push(`${model.label}: resposta vazia`);
+      // Corpo pode ser SSE (stream:true) ou JSON puro; o helper acumula os
+      // deltas do stream e devolve o conteúdo final (content > reasoning).
+      const content = await readAiResponseContent(response);
+      if (!content) {
+        errors.push(`${model.label}: resposta vazia ou ilegível`);
         break;
       }
       return content;
@@ -654,7 +687,7 @@ function buildSkillsContext(userSkills) {
 }
 
 function isGatewayError(message) {
-  return /502|503|504|gateway|timeout|timed out|congestionado|instabilidade|unavailable|não respondeu/i.test(String(message));
+  return /502|503|504|524|gateway|timeout|timed out|congestionado|instabilidade|unavailable|não respondeu/i.test(String(message));
 }
 
 async function continuaLoop(model, workingFiles, supabase, jobId, extraContext = "", maxAttempts = 8) {
