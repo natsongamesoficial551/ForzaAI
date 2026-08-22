@@ -77,6 +77,43 @@ const updateJob = async (supabase, jobId, patch) => {
   if (error) console.error("[background generation] job update failed", error);
 };
 
+// Erros do Supabase/Postgres chegam como objeto {code, message, details} —
+// sem isso viram "[object Object]" e escondem a causa real nos logs/UI.
+function describeEngineError(error) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const pg = error;
+    if (pg.code === "23503" && /project/i.test(String(pg.details))) {
+      return "O projeto foi deletado enquanto a geração rodava (chave estrangeira em project_files).";
+    }
+    return String(pg.message || pg.error_description || JSON.stringify(pg).slice(0, 300));
+  }
+  return String(error);
+}
+
+// Jobs de execuções mortas (redeploy/restart do engine) ficam "running" para
+// sempre no banco e o UI mostra "gerando" infinitamente. Ao iniciar qualquer
+// job, marca como failed tudo que está parado há mais de 10 minutos.
+async function failStaleJobs(supabase) {
+  const cutoff = new Date(Date.now() - 10 * 60_000).toISOString();
+  const { data: stale, error: selectError } = await supabase
+    .from("generation_jobs")
+    .select("id")
+    .in("status", ["queued", "running"])
+    .lt("updated_at", cutoff);
+  if (selectError || !stale?.length) return;
+  const { error } = await supabase
+    .from("generation_jobs")
+    .update({
+      status: "failed",
+      stage: "Interrompido (motor reiniciado)",
+      error: "A geração foi interrompida por uma reinicialização do motor. Tente novamente.",
+      completed_at: new Date().toISOString(),
+    })
+    .in("id", stale.map((row) => row.id));
+  if (error) console.error("[background generation] stale jobs update failed", error);
+}
+
 const updateRun = async (supabase, runId, patch) => {
   const { error } = await supabase
     .from("engine_runs")
@@ -1391,7 +1428,7 @@ ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}
   } catch (error) {
     await updateRun(supabase, run.id, {
       status: "failed",
-      error: error instanceof Error ? error.message : String(error),
+      error: describeEngineError(error),
       completed_at: new Date().toISOString(),
     });
     throw error;
@@ -1413,6 +1450,7 @@ export default async (request) => {
   });
 
   try {
+    await failStaleJobs(supabase);
     await updateJob(supabase, jobId, { status: "running", stage: `Forza Engine v${ENGINE_VERSION}: carregando projeto…` });
     const { data: job, error: jobError } = await supabase
       .from("generation_jobs")
@@ -1470,13 +1508,14 @@ export default async (request) => {
     return json(200, { ok: true });
   } catch (error) {
     console.error("[background generation] failed", error);
+    const message = describeEngineError(error);
     await updateJob(supabase, jobId, {
       status: "failed",
       stage: "Falhou",
-      error: error instanceof Error ? error.message : String(error),
+      error: message,
       completed_at: new Date().toISOString(),
     });
-    return json(500, { error: error instanceof Error ? error.message : String(error) });
+    return json(500, { error: message });
   }
 };
 
