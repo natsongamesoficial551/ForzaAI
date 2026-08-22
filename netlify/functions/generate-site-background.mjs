@@ -50,7 +50,7 @@ function getEnrichedContract(baseContract) {
 const RESPONSIVE_RULES =
   "RESPONSIVIDADE OBRIGATÓRIA (celulares de 320px a 430px, tablets 768–1024px, desktop): mobile-first com tipografia e espaçamentos fluidos via clamp(); breakpoints @media (max-width) em 1024px, 768px, 560px, 430px e 360px; grids colapsam para 1–2 colunas até 560px (prefira repeat(auto-fit, minmax(min(100%,260px),1fr))); ZERO scroll horizontal (overflow-x:clip no body, nunca width/min-width fixos maiores que 100%, cuide de white-space:nowrap e posicionamentos absolutos que transbordem); imagens e vídeos max-width:100% com aspect-ratio; alvos de toque mínimos de 44x44px; menu hamburguer funcional abaixo de 768px; heroes com min-height:100dvh (fallback 100vh), nunca 100vh puro; respeite env(safe-area-inset-*) em elementos fixos; o HTML precisa de <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">; valide mentalmente em 320px: nada pode cortar, transbordar ou sobrepor.";
 
-export const ENGINE_VERSION = "2.4.0-multi-format";
+export const ENGINE_VERSION = "2.5.0-idle-guard";
 
 // 10 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free,
 // mas provedores/gateways (9router) podem ficar bem mais lentos em pico.
@@ -574,7 +574,12 @@ function parseGatewayPayload(raw) {
 // 524 do Cloudflare, que corta respostas longas quando nada é transmitido por
 // ~100s. Também aceita corpo JSON puro (fallback de gateways sem streaming).
 async function readAiResponseContent(response) {
-  const raw = await response.text();
+  const raw = await readBodyWithIdleTimeout(response, 90_000);
+  // Alguns proxies respondem página HTML "Inactivity Timeout" em vez de
+  // cortar a conexão — trata como transitório para o retry assumir.
+  if (/inactivity timeout|too much time has passed/i.test(raw)) {
+    throw new Error("gateway inactivity timeout (proxy cortou stream parado)");
+  }
   const contentType = response.headers.get("content-type") || "";
   const looksSse = /text\/event-stream/i.test(contentType) || /(^|\n)\s*data:/.test(raw);
   if (!looksSse) {
@@ -620,7 +625,40 @@ function transientNetworkError(error) {
   if (!error) return false;
   const code = error.cause?.code || error.code;
   if (code && ["ECONNRESET", "EPIPE", "ETIMEDOUT", "EAI_AGAIN", "UND_ERR_SOCKET"].includes(code)) return true;
-  return /terminated|socket hang up|ECONNRESET|connection reset/i.test(String(error.message || ""));
+  return /terminated|socket hang up|ECONNRESET|connection reset|inactivity|stream-inativo/i.test(String(error.message || ""));
+}
+
+// Lê o corpo completo com timeout de INATIVIDADE (não total): modelos
+// thinking podem passar 100s+ sem emitir o primeiro token, e proxies
+// intermediários cortam com "Inactivity Timeout" nesse período — em TODAS
+// as tentativas, pois o retry repete as mesmas condições. Abortamos antes
+// do corte do proxy para o retry poder desativar o thinking.
+async function readBodyWithIdleTimeout(response, idleMs) {
+  if (!response.body?.getReader) return response.text();
+  const reader = response.body.getReader();
+  const chunks = [];
+  try {
+    while (true) {
+      let idleTimer;
+      const idleGuard = new Promise((_, reject) => {
+        idleTimer = setTimeout(
+          () => reject(new Error(`stream-inativo: nenhum chunk por ${Math.round(idleMs / 1000)}s`)),
+          idleMs,
+        );
+      });
+      let result;
+      try {
+        result = await Promise.race([reader.read(), idleGuard]);
+      } finally {
+        clearTimeout(idleTimer);
+      }
+      if (result.done) break;
+      chunks.push(Buffer.from(result.value));
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    reader.cancel().catch(() => {});
+  }
 }
 
 // Modelos de raciocínio (GLM/Qwen "thinking") às vezes ecoam o planejamento
@@ -718,6 +756,12 @@ async function fetchAiText(modelOrModels, body, context = {}) {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), attemptTimeoutMs);
+      // Retry/fallback desativa thinking: modelos de raciocínio podem ficar
+      // 100s+ sem emitir token algum (o proxy corta com "Inactivity Timeout")
+      // e o retry com as mesmas condições falha de novo. Sem thinking o
+      // modelo emite o primeiro token em segundos. Ignorado por gateways
+      // que não conhecem o parâmetro.
+      const disableThinking = attempt > 1 || modelIndex > 0;
       let response;
       try {
         const endpointUrl = resolveEndpoint(model.endpoint);
@@ -732,7 +776,13 @@ async function fetchAiText(modelOrModels, body, context = {}) {
           // stream:true força o gateway a transmitir chunks contínuos. Sem
           // isso, o Cloudflare na frente do 9router corta com 524 (~100s sem
           // bytes enviados) em gerações longas, antes do modelo terminar.
-          body: JSON.stringify(normalizeAiRequestBody(model, { ...body, stream: true })),
+          body: JSON.stringify(
+            normalizeAiRequestBody(model, {
+              ...body,
+              stream: true,
+              ...(disableThinking ? { enable_thinking: false } : {}),
+            }),
+          ),
         });
       } catch (error) {
         if (error?.name === "AbortError") {
