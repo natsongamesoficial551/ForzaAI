@@ -906,6 +906,13 @@ document.addEventListener('click', function(event) {
     if (hasDoc) {
       let doc = html;
       if (!/<base\b/i.test(doc)) doc = doc.replace(/<head>/i, `<head><base href="about:srcdoc">`);
+      // Mobile: sem viewport meta o iframe renderiza como desktop em telas
+      // estreitas — garante a tag mesmo se o modelo esquecer.
+      if (!/<meta[^>]+name=["']viewport["']/i.test(doc))
+        doc = doc.replace(
+          /<head[^>]*>/i,
+          (m) => `${m}<meta name="viewport" content="width=device-width, initial-scale=1">`,
+        );
       if (css)
         doc = doc.replace(/<\/head>/i, `<style data-forza-preview="true">${css}</style></head>`);
       // React/JSX: o script contém JSX ou o shell referencia text/babel —

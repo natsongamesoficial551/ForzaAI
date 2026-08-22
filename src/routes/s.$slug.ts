@@ -44,6 +44,14 @@ export const Route = createFileRoute("/s/$slug")({
         let doc: string;
         if (hasHtmlDocument) {
           doc = html;
+          // Mobile: sem viewport meta o navegador renderiza como desktop
+          // (~980px virtual) em qualquer celular — garante a tag.
+          if (!/<meta[^>]+name=["']viewport["']/i.test(doc)) {
+            doc = doc.replace(
+              /<head[^>]*>/i,
+              (m) => `${m}<meta name="viewport" content="width=device-width, initial-scale=1">`,
+            );
+          }
           // O doc referencia styles.css/script.js como arquivos que não existem
           // nesta rota (404): remove as referências e injeta o conteúdo inline.
           if (css) {
