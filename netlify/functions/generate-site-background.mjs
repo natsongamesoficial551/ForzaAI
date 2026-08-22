@@ -44,7 +44,7 @@ function getEnrichedContract(baseContract) {
 
 // Versão do engine: exposta no /health do Render e no primeiro stage do job,
 // para identificar qual versão está de fato rodando em produção.
-export const ENGINE_VERSION = "2.1.0-sse";
+export const ENGINE_VERSION = "2.2.0-stream-retry";
 
 // 10 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free,
 // mas provedores/gateways (9router) podem ficar bem mais lentos em pico.
@@ -593,6 +593,16 @@ async function readAiResponseContent(response) {
   return finalContent.trim() ? finalContent : null;
 }
 
+// Erros de rede transitórios (reset de socket no meio do stream, pipe
+// quebrado etc.) valem retry: o gateway/Cloudflare pode cortar streams
+// longos ou silenciosos (modelos de raciocínio "pensando") sem aviso.
+function transientNetworkError(error) {
+  if (!error) return false;
+  const code = error.cause?.code || error.code;
+  if (code && ["ECONNRESET", "EPIPE", "ETIMEDOUT", "EAI_AGAIN", "UND_ERR_SOCKET"].includes(code)) return true;
+  return /terminated|socket hang up|ECONNRESET|connection reset/i.test(String(error.message || ""));
+}
+
 async function fetchAiText(modelOrModels, body, context = {}) {
   // Aceita um único modelo ou uma lista ordenada (fallback automático):
   // se o modelo primário falhar com gateway/timeout, tenta o próximo.
@@ -639,6 +649,11 @@ async function fetchAiText(modelOrModels, body, context = {}) {
         if (error?.name === "AbortError") {
           errors.push(`${model.label}: timeout de ${Math.round(attemptTimeoutMs / 1000)}s`);
           break; // timeout longo não melhora trocando de modelo; pula
+        }
+        if (transientNetworkError(error) && attempt < maxAttempts) {
+          errors.push(`${model.label}: ${describeFetchFailure(error)} (transitório, repetindo ${attempt}/${maxAttempts - 1})`);
+          await sleep(3_000);
+          continue;
         }
         errors.push(`${model.label}: ${describeFetchFailure(error)}`);
         break; // falha de conexão local — modelo não vai resolver
@@ -689,7 +704,21 @@ async function fetchAiText(modelOrModels, body, context = {}) {
 
       // Corpo pode ser SSE (stream:true) ou JSON puro; o helper acumula os
       // deltas do stream e devolve o conteúdo final (content > reasoning).
-      const content = await readAiResponseContent(response);
+      // O fetch já retornou OK aqui, mas o socket pode ser resetado no meio
+      // da leitura (ECONNRESET -> "TypeError: terminated") — é transitório e
+      // retryável, não pode derrubar a geração inteira sem retry/fallback.
+      let content;
+      try {
+        content = await readAiResponseContent(response);
+      } catch (error) {
+        if (transientNetworkError(error) && attempt < maxAttempts) {
+          errors.push(`${model.label}: stream interrompido (${describeFetchFailure(error)}), repetindo ${attempt}/${maxAttempts - 1}…`);
+          await sleep(3_000);
+          continue;
+        }
+        errors.push(`${model.label}: falha lendo resposta — ${describeFetchFailure(error)}`);
+        break; // segue para o próximo modelo (fallback)
+      }
       if (!content) {
         errors.push(`${model.label}: resposta vazia ou ilegível`);
         break;
