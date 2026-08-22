@@ -44,7 +44,7 @@ function getEnrichedContract(baseContract) {
 
 // Versão do engine: exposta no /health do Render e no primeiro stage do job,
 // para identificar qual versão está de fato rodando em produção.
-export const ENGINE_VERSION = "2.2.0-stream-retry";
+export const ENGINE_VERSION = "2.3.0-reasoning-guard";
 
 // 10 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free,
 // mas provedores/gateways (9router) podem ficar bem mais lentos em pico.
@@ -590,7 +590,7 @@ async function readAiResponseContent(response) {
     if (typeof choice?.text === "string") content += choice.text;
   }
   const finalContent = content.trim() ? content : reasoning;
-  return finalContent.trim() ? finalContent : null;
+  return stripThinking(finalContent) || null;
 }
 
 // Erros de rede transitórios (reset de socket no meio do stream, pipe
@@ -601,6 +601,37 @@ function transientNetworkError(error) {
   const code = error.cause?.code || error.code;
   if (code && ["ECONNRESET", "EPIPE", "ETIMEDOUT", "EAI_AGAIN", "UND_ERR_SOCKET"].includes(code)) return true;
   return /terminated|socket hang up|ECONNRESET|connection reset/i.test(String(error.message || ""));
+}
+
+// Modelos de raciocínio (GLM/Qwen "thinking") às vezes ecoam o planejamento
+// em texto dentro do próprio content — com ou sem tags <think>. Essa prosa
+// corrompe CSS/JS (browser não estiliza / SyntaxError) e precisa sair antes
+// de salvar os arquivos. stripThinking remove as tags; o sanitizador por tipo
+// remove prosa crua (sem tag) antes da primeira linha com cara de código.
+function stripThinking(text) {
+  return String(text || "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<think>[\s\S]*$/i, "") // tag aberta sem fechamento (stream cortado)
+    .trim();
+}
+
+function sanitizeGeneratedFile(text, kind) {
+  let t = stripThinking(text);
+  if (!t) return t;
+  const patterns = {
+    css: /(^|\n)\s*(?:\/\*|@(?:import|charset|font-face|layer|media|supports|keyframes|property|container)\b|[^\n{}]*\{)/,
+    js: /(^|\n)\s*(?:\/\*|\/\/|['"`]|!|import\s|export\s|const\s|let\s|var\s|function\s|async\s|class\s|document\.|window\.|\()/,
+    html: /(^|\n)\s*(?:<!--|<!doctype|<html)/i,
+  };
+  const re = patterns[kind];
+  if (!re) return t;
+  const match = t.match(re);
+  if (match && match.index > 0) {
+    const cut = t.slice(match.index).trim();
+    // só descarta o prefixo se sobrou material suficiente de código
+    if (cut.length >= 200) t = cut;
+  }
+  return t;
 }
 
 async function fetchAiText(modelOrModels, body, context = {}) {
@@ -1410,9 +1441,11 @@ ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}
           { role: "user", content: `${requestContext}${contextFiles}` },
         ],
       }, { supabase, jobId: job.id });
-      if (stage.key === "index.html") html = content;
-      else if (stage.key === "styles.css") css = content;
-      else js = content;
+      // Sanitiza: modelos thinking podem prefixar raciocínio/prosa no content,
+      // o que corrompe CSS/JS no preview (bug "HTML puro").
+      if (stage.key === "index.html") html = sanitizeGeneratedFile(content, "html");
+      else if (stage.key === "styles.css") css = sanitizeGeneratedFile(content, "css");
+      else js = sanitizeGeneratedFile(content, "js");
       await saveArtifact(supabase, run.id, "model_raw_output", { stage: stage.key, content: content.slice(0, 120_000) });
     }
 

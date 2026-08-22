@@ -917,7 +917,13 @@ export async function readUpstreamContent(upstream: Response): Promise<string | 
     if (typeof choice?.text === "string") content += choice.text;
   }
   const finalContent = content.trim() ? content : reasoning;
-  return finalContent.trim() ? finalContent : null;
+  // Modelos thinking podem ecoar raciocínio em <think> dentro do content —
+  // remove para não corromper arquivos gerados.
+  const cleaned = finalContent
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<think>[\s\S]*$/i, "")
+    .trim();
+  return cleaned ? cleaned : null;
 }
 
 export async function fetchAiText(
