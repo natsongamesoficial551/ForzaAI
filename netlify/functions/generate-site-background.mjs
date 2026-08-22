@@ -44,7 +44,7 @@ function getEnrichedContract(baseContract) {
 
 // Versão do engine: exposta no /health do Render e no primeiro stage do job,
 // para identificar qual versão está de fato rodando em produção.
-export const ENGINE_VERSION = "2.3.0-reasoning-guard";
+export const ENGINE_VERSION = "2.4.0-multi-format";
 
 // 10 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free,
 // mas provedores/gateways (9router) podem ficar bem mais lentos em pico.
@@ -195,6 +195,20 @@ function normalizeGeneratedFiles(text, projectName) {
     { path: "styles.css", language: "css", content: css.trim() },
     { path: "script.js", language: "javascript", content: js.trim() },
   ];
+}
+
+// Interpreta a saída do modelo respeitando o formato pedido: single-html
+// devolve um doc completo (CSS/JS inline); os demais seguem o formato
+// delimitado de 3 arquivos.
+function parseFormatOutput(text, projectName, outputFormat) {
+  if (outputFormat === "single-html") {
+    const doc =
+      String(text || "").match(/<!doctype html[\s\S]*?<\/html>/i)?.[0] ??
+      String(text || "").match(/<html[\s\S]*?<\/html>/i)?.[0] ??
+      "";
+    return doc.trim() ? [{ path: "index.html", language: "html", content: doc.trim() }] : null;
+  }
+  return normalizeGeneratedFiles(text, projectName);
 }
 
 function escapeHtml(value) {
@@ -631,7 +645,45 @@ function sanitizeGeneratedFile(text, kind) {
     // só descarta o prefixo se sobrou material suficiente de código
     if (cut.length >= 200) t = cut;
   }
-  return t;
+  return cutForeignTail(t, kind);
+}
+
+// Corta conteúdo de outro tipo colado no fim do arquivo (bug observado:
+// script.js terminando com o styles.css inteiro colado). Ocorre quando o
+// reparo/loop devolve os arquivos numa resposta só e um delimitador vem
+// mascarado em comentário — o regex de extração engole o tipo errado.
+function cutForeignTail(text, kind) {
+  if (kind === "js") {
+    const commented = text.match(/\/\*\s*=+\s*(?:styles?\.?css|css)\s*=+[\s\S]*?\*\/\s*(?:@import\b|:root\b|[.#\w*:\[][^{};]*\{)/i);
+    if (commented && commented.index > 200) return text.slice(0, commented.index).trim();
+    const bare = text.match(/\n\s*(?:@import\s+url|:root\s*\{)/);
+    if (bare && bare.index > 200) return text.slice(0, bare.index).trim();
+  }
+  if (kind === "css") {
+    const commented = text.match(/\/\*\s*=+\s*(?:script|main|app)\.(?:js|mjs)\s*=+[\s\S]*?\*\/\s*(?:['"`(]|\b(?:const|let|var|function|import|export|document\.|window\.|async)\b)/i);
+    if (commented && commented.index > 200) return text.slice(0, commented.index).trim();
+    const bare = text.match(/\n\s*(?:\/\*+\s*(?:script|main|app)\.(?:js|mjs)|\((?:function|\)\s*=>)|document\.addEventListener|document\.querySelector)/);
+    if (bare && bare.index > 200) return text.slice(0, bare.index).trim();
+  }
+  return text;
+}
+
+// Formato de saída conforme o pedido do usuário:
+// - three-files (default): index.html + styles.css + script.js
+// - single-html: um único index.html self-contained (CSS/JS inline)
+// - react: shell HTML + CDN React/Babel + script.js com JSX/TSX
+// Vue/Svelte/Angular são atendidos via React no preview (nota no prompt).
+function detectOutputFormat(message) {
+  const t = normalizeText(message || "");
+  if (
+    /(um\s+unico\s+arquivo|arquivo\s+unico|unico\s+html|single\s+(?:file|html)|one\s+file|tudo\s+em\s+um|tudo\s+em\s+um\s+unico|tudo\s+no\s+(?:mesmo\s+)?index|apenas\s+(?:o\s+)?index|only\s+one\s+file|self[- ]contained)/.test(
+      t,
+    )
+  )
+    return "single-html";
+  if (/\b(react|jsx|tsx|next\.?js|createelement)\b/.test(t)) return "react";
+  if (/\b(vue|angular|svelte|solid\.?js?)\b/.test(t)) return "react";
+  return "three-files";
 }
 
 async function fetchAiText(modelOrModels, body, context = {}) {
@@ -1094,13 +1146,22 @@ async function synthesizeFinalFiles(supabase, model, run, job, project, plans, f
 async function repairFilesForQuality(supabase, model, run, job, project, plans, files, gateReport) {
   await setPhase(supabase, job.id, run.id, "implementation", "Forza Engine: reforçando qualidade antes da validação…");
   const contract = deliveryContract(project, job, plans);
+  // O reparo precisa preservar o formato pedido — forçar 3 arquivos num
+  // pedido de HTML único (ou React) destruiria a entrega.
+  const outputFormat = detectOutputFormat(`${job.message ?? ""}\n${project.description ?? ""}`);
+  const formatInstruction =
+    outputFormat === "single-html"
+      ? "Retorne SEMPRE só o index.html completo self-contained: TODO o CSS em <style> no <head> e TODO o JS em <script> no fim do <body>. NÃO separe em styles.css/script.js."
+      : outputFormat === "react"
+        ? 'Retorne SEMPRE só neste formato, sem explicação:\n=== index.html ===\nShell HTML com Google Fonts, <link rel="stylesheet" href="styles.css">, CDNs React 18 UMD + ReactDOM + Babel standalone, <div id="root"></div> e <script type="text/babel" data-presets="react,typescript" src="script.js"></script>\n=== styles.css ===\nCSS completo\n=== script.js ===\nApp React completo em JSX (globais React/ReactDOM, sem import/export)'
+        : "Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo";
   const content = await fetchAiText(model, {
     stream: false,
     temperature: 0.1,
     messages: [
       {
         role: "system",
-        content: "Você é o reparador final do ForzaAI. Corrija somente as lacunas objetivas apontadas, mantendo a IA como autora do site e preservando o pedido original. Retorne SEMPRE só neste formato, sem explicação fora dos arquivos:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nObrigatório: HTML premium e completo, CSS robusto com responsividade usando @media, JS seguro sem eval/segredos, zero placeholders/TODO/lorem ipsum, conteúdo específico do pedido. Nunca deixe hero ou body vazios. Antes de responder, confira internamente se os mínimos semânticos do contrato foram cumpridos, se catálogo/cases/dashboard têm quantidade suficiente, se todo botão visível tem comportamento real, se o ajuste pedido aparece no código e se não existe tema claro/escuro quando não foi pedido.",
+        content: `Você é o reparador final do ForzaAI. Corrija somente as lacunas objetivas apontadas, mantendo a IA como autora do site e preservando o pedido original. ${formatInstruction}\nObrigatório: entrega premium e completa, CSS robusto com responsividade usando @media, JS seguro sem eval/segredos, zero placeholders/TODO/lorem ipsum, conteúdo específico do pedido. Nunca deixe hero ou body vazios. Antes de responder, confira internamente se os mínimos semânticos do contrato foram cumpridos, se catálogo/cases/dashboard têm quantidade suficiente, se todo botão visível tem comportamento real, se o ajuste pedido aparece no código e se não existe tema claro/escuro quando não foi pedido.`,
       },
       {
         role: "user",
@@ -1109,7 +1170,7 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
     ],
   }, { supabase, jobId: job.id });
   await saveArtifact(supabase, run.id, "model_raw_output", { repair: true, content: content.slice(0, 120_000), issues: gateReport.issues || [] });
-  const parsed = normalizeGeneratedFiles(content, project.name);
+  const parsed = parseFormatOutput(content, project.name, outputFormat);
   if (!parsed) return files;
   const parsedReport = analyzeGeneratedSite(project, job, parsed);
   if (parsedReport.passed) return parsed;
@@ -1121,7 +1182,7 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
     messages: [
       {
         role: "system",
-        content: "Você é o expansor final de conteúdo do ForzaAI. O HTML atual é válido, mas insuficiente. Não resuma. Reescreva os três arquivos completos com uma página cheia e navegável. Retorne somente:\n=== index.html ===\nHTML completo\n=== styles.css ===\nCSS completo\n=== script.js ===\nJavaScript completo\nRegras: no mínimo 7 seções reais, 6 headings h1-h3, 1400+ caracteres de texto visível, cards/listas, CTA, FAQ e footer. Nada de conteúdo vazio. Formulários, filtros, carrinho, tabs, modais, menu mobile e FAQ visíveis precisam funcionar no script.js. Tema claro/escuro só deve existir se o usuário pediu explicitamente; se não pediu, remova ícone de lua/sol e qualquer toggle de tema.",
+        content: `Você é o expansor final de conteúdo do ForzaAI. O site atual é válido, mas insuficiente. Não resuma. Reescreva a entrega completa com uma página cheia e navegável. ${formatInstruction}\nRegras: no mínimo 7 seções reais, 6 headings h1-h3, 1400+ caracteres de texto visível, cards/listas, CTA, FAQ e footer. Nada de conteúdo vazio. Formulários, filtros, carrinho, tabs, modais, menu mobile e FAQ visíveis precisam funcionar. Tema claro/escuro só deve existir se o usuário pediu explicitamente; se não pediu, remova ícone de lua/sol e qualquer toggle de tema.`,
       },
       {
         role: "user",
@@ -1130,7 +1191,7 @@ async function repairFilesForQuality(supabase, model, run, job, project, plans, 
     ],
   }, { supabase, jobId: job.id });
   await saveArtifact(supabase, run.id, "model_raw_output", { expansion: true, content: expansion.slice(0, 120_000), issues: parsedReport.issues || [] });
-  return normalizeGeneratedFiles(expansion, project.name) ?? parsed;
+  return parseFormatOutput(expansion, project.name, outputFormat) ?? parsed;
 }
 
 function visibleTextFromHtml(html) {
@@ -1151,6 +1212,19 @@ function analyzeGeneratedSite(project, job, files) {
   const visibleText = visibleTextFromHtml(html);
   const requirements = projectTypeRequirements(project, job);
   const minimums = requirements.minimums || {};
+  // Validação consciente do formato: single-html carrega CSS/JS inline no
+  // próprio HTML; react carrega o conteúdo visível no JSX do script.js.
+  // Checagens de HTML renderizado não fazem sentido para shell React.
+  const outputFormat = detectOutputFormat(`${job.message ?? ""}\n${project.description ?? ""}`);
+  const isSingleHtml = outputFormat === "single-html";
+  const isReact = outputFormat === "react";
+  const effectiveCss = isSingleHtml
+    ? [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1].trim()).join("\n")
+    : css;
+  const effectiveJs = isSingleHtml
+    ? [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1].trim()).join("\n")
+    : js;
+  const contentHtml = isReact ? combined : html;
   const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? html;
   const main = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1] ?? "";
   const firstViewport = body.slice(0, 4500);
@@ -1158,9 +1232,9 @@ function analyzeGeneratedSite(project, job, files) {
   const firstViewportBlocks = (firstViewport.match(/<section\b|<article\b|<aside\b|<div\b|<p\b|<h[1-3]\b|<a\b|<button\b/gi) || []).length;
   const cssHidesContent = /body\s*\{[^}]*color\s*:\s*(?:#fff|white|rgb\(255\s*,\s*255\s*,\s*255\))[^}]*background\s*:\s*(?:#fff|white|rgb\(255\s*,\s*255\s*,\s*255\))|opacity\s*:\s*0|visibility\s*:\s*hidden|display\s*:\s*none/i.test(css);
   const likelyBlankViewport = firstViewportText.length < 180 || firstViewportBlocks < 8 || /min-height\s*:\s*(?:70|80|90|100)vh[^}]{0,260}\{?[^}]*\}/i.test(css) && firstViewportText.length < 320;
-  const productMatches = html.match(/(?:class|data-[\w-]+|id)=["'][^"']*(?:product|produto|item-card|card-produto)[^"']*["']|R\$\s*\d|comprar|adicionar ao carrinho/gi) || [];
-  const caseMatches = html.match(/(?:case|projeto|portfolio|portfólio)[\s\S]{0,140}?(?:<article|<li|<div|<h3)|(?:class|id)=["'][^"']*(?:case|project|projeto|portfolio)[^"']*["']/gi) || [];
-  const appBlockMatches = html.match(/dashboard|onboarding|login|settings|configuraç|billing|pricing|métrica|metric|kanban|pipeline/gi) || [];
+  const productMatches = contentHtml.match(/(?:class|data-[\w-]+|id)=["'][^"']*(?:product|produto|item-card|card-produto)[^"']*["']|R\$\s*\d|comprar|adicionar ao carrinho/gi) || [];
+  const caseMatches = contentHtml.match(/(?:case|projeto|portfolio|portfólio)[\s\S]{0,140}?(?:<article|<li|<div|<h3)|(?:class|id)=["'][^"']*(?:case|project|projeto|portfolio)[^"']*["']/gi) || [];
+  const appBlockMatches = contentHtml.match(/dashboard|onboarding|login|settings|configuraç|billing|pricing|métrica|metric|kanban|pipeline/gi) || [];
   const metrics = {
     htmlChars: html.length,
     cssChars: css.length,
@@ -1177,7 +1251,7 @@ function analyzeGeneratedSite(project, job, files) {
     cases: caseMatches.length,
     appBlocks: new Set(appBlockMatches.map((match) => normalizeText(match))).size,
     forms: (html.match(/<form\b/gi) || []).length,
-    cssRules: (css.match(/\{[^}]*\}/g) || []).length,
+    cssRules: (effectiveCss.match(/\{[^}]*\}/g) || []).length,
     hasMain: /<main\b/i.test(html),
     hasHeroH1: /<h1\b/i.test(firstViewport),
     hasHeroCta: /<a\b[^>]*href=["']#|<button\b/i.test(firstViewport),
@@ -1189,16 +1263,24 @@ function analyzeGeneratedSite(project, job, files) {
   const addBlocking = (issue, instruction = issue) => { blocking.push(issue); repairInstructions.push(instruction); };
   const addWarning = (issue, instruction = issue) => { warnings.push(issue); repairInstructions.push(instruction); };
 
-  for (const path of ["index.html", "styles.css", "script.js"]) if (!byPath[path]?.trim()) addBlocking(`Arquivo obrigatório ausente ou vazio: ${path}`, `Retorne ${path} completo e coerente com os outros arquivos.`);
-  if (!metrics.hasMain) addBlocking("HTML sem tag <main> semântica.", "Adicione <main> envolvendo o conteúdo principal com hero e seções reais.");
-  if (visibleText.length < Math.max(900, minimums.visibleText - 400)) addBlocking("Body sem conteúdo real suficiente.", `Expanda a copy visível para pelo menos ${minimums.visibleText} caracteres com conteúdo específico do briefing.`);
-  if (metrics.sections < Math.max(4, minimums.sections - 2)) addBlocking("Poucas seções estruturais para uma entrega completa.", `Crie pelo menos ${minimums.sections} seções reais: ${requirements.required_sections.join(", ")}.`);
-  if (metrics.cssRules < Math.max(18, minimums.cssRules - 10)) addBlocking("CSS sem regras suficientes para layout básico premium.", "Expanda o CSS com layout, grids, cards, estados, responsividade e primeira dobra preenchida.");
-  try { new Function(js); } catch (error) { addBlocking(`JavaScript com erro de sintaxe: ${error.message}`, "Corrija a sintaxe do script.js mantendo todas as interações funcionando."); }
-  if (!metrics.hasHeroH1 || !metrics.hasHeroCta || !metrics.hasHeroSubtitle) addBlocking("Hero acima da dobra incompleto.", "No início do body/main, inclua hero com h1, subtítulo, CTA e apoio visual/card sem área branca dominante.");
-  if (likelyBlankViewport) addBlocking("Primeira dobra provavelmente branca ou vazia.", "Preencha a primeira viewport com hero denso: h1, subtítulo, dois CTAs, prova social/métrica e card/visual ao lado, sem bloco branco gigante.");
-  if (cssHidesContent) addBlocking("CSS pode esconder ou branquear o conteúdo principal.", "Garanta contraste real entre texto e fundo, sem opacity 0, visibility hidden ou display none em conteúdo principal.");
-  if (/ForzaAI\s*<\/h1>|Home\s*<\/button>|Templates\s*<\/button>|Analytics\s*<\/button>|Configurações\s*<\/button>/i.test(html)) addBlocking("Preview parece scaffold genérico do editor, não o site solicitado.", "Substitua qualquer scaffold por conteúdo específico do projeto do usuário.");
+  const requiredPaths = isSingleHtml ? ["index.html"] : ["index.html", "styles.css", "script.js"];
+  for (const path of requiredPaths) if (!byPath[path]?.trim()) addBlocking(`Arquivo obrigatório ausente ou vazio: ${path}`, `Retorne ${path} completo e coerente com os outros arquivos.`);
+  if (!isReact) {
+    if (!metrics.hasMain) addBlocking("HTML sem tag <main> semântica.", "Adicione <main> envolvendo o conteúdo principal com hero e seções reais.");
+    if (visibleText.length < Math.max(900, minimums.visibleText - 400)) addBlocking("Body sem conteúdo real suficiente.", `Expanda a copy visível para pelo menos ${minimums.visibleText} caracteres com conteúdo específico do briefing.`);
+    if (metrics.sections < Math.max(4, minimums.sections - 2)) addBlocking("Poucas seções estruturais para uma entrega completa.", `Crie pelo menos ${minimums.sections} seções reais: ${requirements.required_sections.join(", ")}.`);
+    if (metrics.cssRules < Math.max(18, minimums.cssRules - 10)) addBlocking("CSS sem regras suficientes para layout básico premium.", "Expanda o CSS com layout, grids, cards, estados, responsividade e primeira dobra preenchida.");
+    try { new Function(effectiveJs); } catch (error) { addBlocking(`JavaScript com erro de sintaxe: ${error.message}`, "Corrija a sintaxe do script.js mantendo todas as interações funcionando."); }
+    if (!metrics.hasHeroH1 || !metrics.hasHeroCta || !metrics.hasHeroSubtitle) addBlocking("Hero acima da dobra incompleto.", "No início do body/main, inclua hero com h1, subtítulo, CTA e apoio visual/card sem área branca dominante.");
+    if (likelyBlankViewport) addBlocking("Primeira dobra provavelmente branca ou vazia.", "Preencha a primeira viewport com hero denso: h1, subtítulo, dois CTAs, prova social/métrica e card/visual ao lado, sem bloco branco gigante.");
+    if (cssHidesContent) addBlocking("CSS pode esconder ou branquear o conteúdo principal.", "Garanta contraste real entre texto e fundo, sem opacity 0, visibility hidden ou display none em conteúdo principal.");
+    if (/ForzaAI\s*<\/h1>|Home\s*<\/button>|Templates\s*<\/button>|Analytics\s*<\/button>|Configurações\s*<\/button>/i.test(html)) addBlocking("Preview parece scaffold genérico do editor, não o site solicitado.", "Substitua qualquer scaffold por conteúdo específico do projeto do usuário.");
+  } else {
+    // Shell React: valida o que de fato existe nesse formato.
+    if (!/ReactDOM\.(?:createRoot|render)/.test(js)) addBlocking("App React sem montagem no root.", 'Finalize o script.js com ReactDOM.createRoot(document.getElementById("root")).render(<App />).');
+    if (!/<div[^>]+id=["']root["']/i.test(html)) addBlocking("Shell React sem <div id=\"root\">.", 'Inclua <div id="root"></div> no body do shell HTML.');
+    if (metrics.cssRules < 25) addBlocking("CSS do app React insuficiente.", "Expanda o styles.css com layout, tipografia, componentes e responsividade.");
+  }
   if (/TODO|lorem ipsum|coming soon|em breve/i.test(combined.replace(/\splaceholder=("[^"]*"|'[^']*')/gi, ""))) addBlocking("Arquivos contêm placeholder ou conteúdo incompleto.", "Troque TODO/lorem/em breve por conteúdo final específico e seções completas.");
   if (/eval\s*\(|service[_-]?role|api[_-]?key\s*=|sk-[a-z0-9]{20,}/i.test(combined)) addBlocking("Arquivos contêm padrão inseguro ou possível segredo.", "Remova eval, chaves, service role, SQL sensível e qualquer segredo do frontend.");
 
@@ -1282,6 +1364,19 @@ async function saveFiles(supabase, projectId, files) {
       });
       if (error) throw error;
     }
+  }
+  // Quando a saída muda de formato (ex.: usuário pediu HTML único depois de
+  // um site em 3 arquivos), remove os arquivos legados que não fazem mais
+  // parte do site — senão o preview/publicado mistura CSS/JS antigos.
+  const keptPaths = new Set(files.map((file) => file.path));
+  for (const legacy of ["styles.css", "script.js"]) {
+    if (keptPaths.has(legacy)) continue;
+    const { error: removeError } = await supabase
+      .from("project_files")
+      .delete()
+      .eq("project_id", projectId)
+      .eq("path", legacy);
+    if (removeError) console.error("[forza engine] legacy file remove failed", legacy, removeError);
   }
   const { error } = await supabase.from("projects").update({
     status: "active",
@@ -1405,25 +1500,58 @@ Seções obrigatórias: ${typeRequirements.required_sections.join(", ")}
 ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}`;
 
     // Geração arquivo por arquivo: 3 chamadas menores em vez de 1 gigante.
-    // Modelos free (kilo-auto/stepfun) retornam 503 quando pedimos os 3
-    // arquivos numa resposta só; 8-16k tokens por arquivo passam sem erro.
-    const stages = [
-      {
-        key: "index.html",
-        stage: "Forza Engine: gerando HTML…",
-        system: `Você é o gerador de sites premium do ForzaAI. Gere APENAS o conteúdo do index.html completo (sem markdown, sem cercas de código, sem explicação). ${designBrief}\nRegras: site completo e publicável, hero no topo com título + subtítulo + 2 CTAs + apoio visual, mínimo ${typeRequirements.minimums.sections} seções reais (${typeRequirements.required_sections.join(", ")}), semântico (<main>, <section>, <header>, <footer>), links para styles.css e script.js, copy específica em português do Brasil com pelo menos ${typeRequirements.minimums.visibleText} caracteres visíveis, ${typeRequirements.minimums.cards}+ cards/itens, zero placeholders/TODO/lorem. NÃO inclua <style> nem <script> inline — todo CSS vai em styles.css e todo JS em script.js. ${typeRequirements.checklist}`,
-      },
-      {
-        key: "styles.css",
-        stage: "Forza Engine: gerando CSS…",
-        system: `Você é o designer CSS do ForzaAI. Recebe o HTML já gerado e produz APENAS o conteúdo do styles.css completo (sem markdown, sem explicação). ${designBrief}\nRegras: CSS robusto com variáveis (:root), tipografia Google Fonts (via @import), layout com Grid/Flexbox, estados hover/focus/active, micro-interações, transições suaves, responsivo com @media para tablet (768px) e mobile (480px), no mínimo ${typeRequirements.minimums.cssRules} regras, primeira dobra visualmente densa (sem área branca dominante), acessibilidade (contraste, focus-visible). Estilize TODAS as classes/ids presentes no HTML.`,
-      },
-      {
-        key: "script.js",
-        stage: "Forza Engine: gerando JavaScript…",
-        system: `Você é o desenvolvedor JS do ForzaAI. Recebe o HTML já gerado e produz APENAS o conteúdo do script.js completo (sem markdown, sem explicação). Regras: JS puro sem dependências, sem eval, sem innerHTML com dados variáveis, sem segredos. Implemente comportamento real para TODO elemento interativo do HTML: menu mobile, navegação âncora suave, tabs, FAQ accordion, formulários com validação + feedback de sucesso/erro simulado, carrinho quando existir, revelação on-scroll via IntersectionObserver. Use defer-safe (DOMContentLoaded ou script no fim). Compatível com as classes/ids do HTML fornecido.`,
-      },
-    ];
+    // Formato de saída conforme o pedido (default: 3 arquivos).
+    const outputFormat = detectOutputFormat(`${job.message ?? ""}\n${project.description ?? ""}`);
+    const antiTruncate =
+      "CRÍTICO: entregue o arquivo COMPLETO e sintaticamente fechado — nunca corte no meio; todas as funções, chaves, parênteses e blocos devem fechar. Se estiver longo, simplifique detalhes internos, mas NÃO trunque. Sem comentários de explicação fora de código.";
+    const maxTokens = 16_000;
+
+    let stages;
+    if (outputFormat === "single-html") {
+      stages = [
+        {
+          key: "index.html",
+          stage: "Forza Engine: gerando HTML único self-contained…",
+          system: `Você é o gerador de sites premium do ForzaAI. O usuário pediu UM ÚNICO index.html self-contained: gere APENAS o index.html completo (sem markdown, sem cercas), com TODO o CSS dentro de <style> no <head> e TODO o JS dentro de <script> no fim do <body>. NÃO referencia styles.css nem script.js. ${designBrief}\nRegras: site completo e publicável; hero impactante com título + subtítulo + 2 CTAs + apoio visual; mínimo ${typeRequirements.minimums.sections + 2} seções reais (${typeRequirements.required_sections.join(", ")}) + depoimentos/FAQ quando couber + footer completo; semântico (<main>, <section>, <header>, <footer>); copy específica em português do Brasil com pelo menos ${typeRequirements.minimums.visibleText} caracteres visíveis; ${typeRequirements.minimums.cards}+ cards/itens; zero placeholders/TODO/lorem. CSS: variáveis :root, Google Fonts, Grid/Flexbox, hover/focus, microinterações, @keyframes, responsivo 768px/480px, prefers-reduced-motion. JS: menu mobile, âncora suave, tabs/accordion, IntersectionObserver reveals, formulário com validação e feedback. ${antiTruncate}`,
+        },
+      ];
+    } else if (outputFormat === "react") {
+      stages = [
+        {
+          key: "index.html",
+          stage: "Forza Engine: gerando shell React…",
+          system: `Você é o gerador do ForzaAI. O usuário pediu React: gere APENAS o index.html shell (sem markdown). Ele deve conter: <head> com Google Fonts e <link rel="stylesheet" href="styles.css">; CDNs via <script src>: React 18 UMD (https://unpkg.com/react@18/umd/react.production.min.js), ReactDOM (https://unpkg.com/react-dom@18/umd/react-dom.production.min.js) e Babel standalone (https://unpkg.com/@babel/standalone/babel.min.js); <body> com <div id="root"></div> e no fim <script type="text/babel" data-presets="react,typescript" src="script.js"></script>. ${designBrief}\nNada de CSS/JS inline além disso. ${antiTruncate}`,
+        },
+        {
+          key: "styles.css",
+          stage: "Forza Engine: gerando CSS…",
+          system: `Você é o designer CSS do ForzaAI. Produza APENAS o styles.css completo (sem markdown, sem explicação) para o app React cujo shell HTML foi gerado. ${designBrief}\nRegras: :root com variáveis, Google Fonts (@import), Grid/Flexbox, hover/focus/active, microinterações, @keyframes, transições, responsivo @media 768px e 480px, mínimo ${typeRequirements.minimums.cssRules} regras, primeira dobra densa, focus-visible, prefers-reduced-motion. Estilize todas as classes usadas nos componentes. ${antiTruncate}`,
+        },
+        {
+          key: "script.js",
+          stage: "Forza Engine: gerando app React…",
+          system: `Você é o desenvolvedor React sênior do ForzaAI. Produza APENAS o conteúdo do script.js: um app React completo em JSX/TSX que roda no browser via Babel standalone com as globais React e ReactDOM (NÃO use import/export — use const { useState, useEffect, useRef, useMemo } = React;). Estruture com componentes (Header, Hero, Sobre, Stack/Projetos, Timeline, Contato, Footer conforme o pedido), dados em arrays de objetos, animações de entrada via IntersectionObserver + estado, cursor custom e tilt quando fizer sentido, e finalize com ReactDOM.createRoot(document.getElementById("root")).render(<App />). Copy rica em português do Brasil, zero lorem. ${antiTruncate}`,
+        },
+      ];
+    } else {
+      stages = [
+        {
+          key: "index.html",
+          stage: "Forza Engine: gerando HTML…",
+          system: `Você é o gerador de sites premium do ForzaAI. Gere APENAS o conteúdo do index.html completo (sem markdown, sem cercas de código, sem explicação). ${designBrief}\nRegras: site completo e publicável; hero impactante e denso no topo com título + subtítulo + 2 CTAs + apoio visual (stats ou card flutuante); mínimo ${typeRequirements.minimums.sections + 2} seções reais (${typeRequirements.required_sections.join(", ")}) incluindo depoimentos ou FAQ quando couber e footer rico em colunas; semântico (<main>, <section>, <header>, <footer>); links para styles.css e script.js; copy específica em português do Brasil com pelo menos ${typeRequirements.minimums.visibleText} caracteres visíveis; ${typeRequirements.minimums.cards}+ cards/itens com dados realistas (nomes, números, preços quando couber); formulários com <label>; zero placeholders/TODO/lorem. NÃO inclua <style> nem <script> inline — todo CSS vai em styles.css e todo JS em script.js. ${antiTruncate}`,
+        },
+        {
+          key: "styles.css",
+          stage: "Forza Engine: gerando CSS…",
+          system: `Você é o designer CSS sênior do ForzaAI. Recebe o HTML já gerado e produz APENAS o conteúdo do styles.css completo (sem markdown, sem explicação). ${designBrief}\nRegras: CSS profissional com variáveis (:root), tipografia Google Fonts (@import) com hierarquia clara, layout Grid/Flexbox, estados hover/focus/active, microinterações (transform, filter, box-shadow), @keyframes de entrada/pulsação/flutuação, transições suaves com cubic-bezier, responsivo com @media para tablet (768px) e mobile (480px), no mínimo ${typeRequirements.minimums.cssRules + 30} regras, primeira dobra visualmente densa (sem área branca dominante), scrollbar customizada, ::selection, acessibilidade (contraste, focus-visible) e prefers-reduced-motion. Estilize TODAS as classes/ids presentes no HTML. ${antiTruncate}`,
+        },
+        {
+          key: "script.js",
+          stage: "Forza Engine: gerando JavaScript…",
+          system: `Você é o desenvolvedor JS sênior do ForzaAI. Recebe o HTML já gerado e produz APENAS o conteúdo do script.js completo (sem markdown, sem explicação). Regras: JS puro sem dependências, sem eval, sem segredos. Implemente comportamento real para TODO elemento interativo do HTML: header com scroll-spy e sombra ao rolar, menu mobile acessível, navegação âncora suave com offset, tabs, FAQ accordion exclusivo, formulários com validação + mensagens de sucesso/erro simuladas, carrinho com localStorage quando existir, contadores animados, reveals on-scroll com stagger via IntersectionObserver, tilt 3D leve em cards quando couber, toasts de feedback. defer-safe (DOMContentLoaded). Compatível com as classes/ids do HTML fornecido. ${antiTruncate}`,
+        },
+      ];
+    }
 
     let html = "";
     let css = "";
@@ -1432,15 +1560,23 @@ ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}
     for (const stage of stages) {
       if (remainingBudgetMs() < 90_000) throw new Error("Tempo do motor esgotado antes de completar todos os arquivos.");
       await updateJob(supabase, job.id, { stage: stage.stage });
-      const contextFiles = stage.key === "index.html" ? "" : `\n\nHTML já gerado (estilize/programe exatamente essas marcações):\n${html}`;
-      const content = await fetchAiText(model, {
-        stream: false,
-        temperature: stage.key === "index.html" ? 0.8 : 0.4,
-        messages: [
-          { role: "system", content: stage.system },
-          { role: "user", content: `${requestContext}${contextFiles}` },
-        ],
-      }, { supabase, jobId: job.id });
+      const contextFiles =
+        stage.key === "index.html" || outputFormat === "single-html"
+          ? ""
+          : `\n\nShell HTML já gerado (estilize/programe exatamente essas marcações):\n${html}`;
+      const content = await fetchAiText(
+        model,
+        {
+          stream: false,
+          temperature: stage.key === "index.html" ? 0.8 : 0.4,
+          max_tokens: maxTokens,
+          messages: [
+            { role: "system", content: stage.system },
+            { role: "user", content: `${requestContext}${contextFiles}` },
+          ],
+        },
+        { supabase, jobId: job.id },
+      );
       // Sanitiza: modelos thinking podem prefixar raciocínio/prosa no content,
       // o que corrompe CSS/JS no preview (bug "HTML puro").
       if (stage.key === "index.html") html = sanitizeGeneratedFile(content, "html");
@@ -1449,10 +1585,19 @@ ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}
       await saveArtifact(supabase, run.id, "model_raw_output", { stage: stage.key, content: content.slice(0, 120_000) });
     }
 
-    let files = normalizeGeneratedFiles(
-      `=== index.html ===\n${html}\n=== styles.css ===\n${css}\n=== script.js ===\n${js}`,
-      project.name,
-    );
+    let files;
+    if (outputFormat === "single-html") {
+      // Um único arquivo: não força styles.css/script.js (CSS/JS já vem inline).
+      if (!/<html[\s>]/i.test(html)) {
+        html = `<!doctype html>\n<html lang="pt-BR">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${project.name}</title>\n</head>\n<body>\n${html}\n</body>\n</html>`;
+      }
+      files = html.trim() ? [{ path: "index.html", language: "html", content: html.trim() }] : null;
+    } else {
+      files = normalizeGeneratedFiles(
+        `=== index.html ===\n${html}\n=== styles.css ===\n${css}\n=== script.js ===\n${js}`,
+        project.name,
+      );
+    }
     if (!files || !files[0]?.content?.trim()) {
       const continued = await continuaLoop(model, files ?? [], supabase, job.id, `Gere o site: ${project.name}`);
       files = continued;

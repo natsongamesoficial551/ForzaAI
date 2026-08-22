@@ -32,15 +32,40 @@ export const Route = createFileRoute("/s/$slug")({
         const css = files?.find((f) => f.path === "styles.css")?.content ?? "";
         const js = files?.find((f) => f.path === "script.js")?.content ?? "";
 
+        // React/JSX: shell referencia text/babel ou o script contém JSX —
+        // precisa do Babel standalone (com CDNs se o shell não trouxer).
+        const isBabel =
+          /type=["']text\/babel/i.test(html) ||
+          /ReactDOM\.createRoot|<([A-Z][A-Za-z0-9]*)[\s/>]|React\.(?:createElement|Fragment)|const\s*\{[^}]*\}\s*=\s*React/.test(
+            js,
+          );
+
         const hasHtmlDocument = /<!doctype html>/i.test(html) || /<html[\s>]/i.test(html);
         let doc: string;
         if (hasHtmlDocument) {
           doc = html;
-          if (css && !/<style/i.test(doc)) {
+          // O doc referencia styles.css/script.js como arquivos que não existem
+          // nesta rota (404): remove as referências e injeta o conteúdo inline.
+          if (css) {
+            doc = doc.replace(/<link\b[^>]*href=["'][^"']*styles\.css[^"']*["'][^>]*>/gi, "");
             doc = doc.replace(/<\/head>/i, `<style>${css}</style></head>`);
           }
-          if (js && !/<script/i.test(doc)) {
-            doc = doc.replace(/<\/body>/i, `<script>${js}<\/script></body>`);
+          if (js) {
+            doc = doc.replace(
+              /<script\b[^>]*src=["'][^"']*script\.js[^"']*["'][^>]*>\s*<\/script>/gi,
+              "",
+            );
+            if (isBabel && !/babel(?:-standalone)?\.min\.js/i.test(doc)) {
+              const cdns =
+                `<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"><\/script>` +
+                `<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"><\/script>` +
+                `<script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>`;
+              doc = doc.replace(/<\/body>/i, `${cdns}</body>`);
+            }
+            const scriptTag = isBabel
+              ? `<script type="text/babel" data-presets="react,typescript">${js}<\/script>`
+              : `<script>${js}<\/script>`;
+            doc = doc.replace(/<\/body>/i, `${scriptTag}</body>`);
           }
         } else {
           doc = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(project.name)}</title><style>${css}</style></head><body>${html}<script>${js}<\/script></body></html>`;

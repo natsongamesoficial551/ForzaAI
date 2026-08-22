@@ -908,7 +908,26 @@ document.addEventListener('click', function(event) {
       if (!/<base\b/i.test(doc)) doc = doc.replace(/<head>/i, `<head><base href="about:srcdoc">`);
       if (css)
         doc = doc.replace(/<\/head>/i, `<style data-forza-preview="true">${css}</style></head>`);
-      const inlineScript = js ? `<script>${js}<\/script>` : "";
+      // React/JSX: o script contém JSX ou o shell referencia text/babel —
+      // injeta via Babel standalone (com CDNs se o shell não trouxer).
+      const isBabel =
+        /type=["']text\/babel/i.test(doc) ||
+        /ReactDOM\.createRoot|<([A-Z][A-Za-z0-9]*)[\s/>]|React\.(?:createElement|Fragment)|const\s*\{[^}]*\}\s*=\s*React/.test(
+          js,
+        );
+      const babelCDNs = isBabel
+        ? `<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"><\/script>` +
+          `<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"><\/script>` +
+          `<script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>`
+        : "";
+      if (isBabel && !/babel(?:-standalone)?\.min\.js/i.test(doc)) {
+        doc = doc.replace(/<\/body>/i, `${babelCDNs}</body>`);
+      }
+      const inlineScript = js
+        ? isBabel
+          ? `<script type="text/babel" data-presets="react,typescript">${js}<\/script>`
+          : `<script>${js}<\/script>`
+        : "";
       doc = doc.replace(
         /<script\b[^>]*src=["'][^"']*script\.js[^"']*["'][^>]*>\s*<\/script>/gi,
         "",
