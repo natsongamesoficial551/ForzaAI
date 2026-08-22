@@ -402,7 +402,19 @@ async function listEnabledModels(supabase, preferredModelId) {
     return models;
   }
   const [primary] = models.splice(primaryIndex, 1);
-  return [primary, ...models];
+  // Deduplica por upstream: se vários modelos apontam para o MESMO endpoint +
+  // upstream (comum quando o usuário cadastra 3-4 modelos com kc/kilo-auto/free),
+  // tentar todos é perda de tempo — o segundo falha igual ao primeiro. Mantém o
+  // de menor multiplicador (mais barato) para não inflar o consumo de créditos.
+  const seen = new Set([`${primary.endpoint}|${primary.upstreamModel}`]);
+  const unique = [primary];
+  for (const candidate of models) {
+    const key = `${candidate.endpoint}|${candidate.upstreamModel}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(candidate);
+  }
+  return unique;
 }
 
 function normalizeAiRequestBody(model, body) {
@@ -513,9 +525,14 @@ async function fetchAiText(modelOrModels, body, context = {}) {
     // 4 tentativas com backoff (não há para onde trocar).
     const maxAttempts = models.length > 1 ? 1 : 4;
     const retryWaitBaseMs = models.length > 1 ? 5_000 : 20_000;
+    // Timeout por tentativa: quando há fallback, esperar 5 min num modelo
+    // lento queima o budget inteiro (4 modelos x 300s = 20min > 13min da
+    // engine e 15min da Netlify). O gateway 9router corta upstream em ~30s,
+    // então 60s por tentativa é folga suficiente antes de trocar de modelo.
+    const attemptTimeoutMs = models.length > 1 ? 60_000 : AI_REQUEST_TIMEOUT_MS;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+      const timeout = setTimeout(() => controller.abort(), attemptTimeoutMs);
       let response;
       try {
         const endpointUrl = resolveEndpoint(model.endpoint);
@@ -531,7 +548,7 @@ async function fetchAiText(modelOrModels, body, context = {}) {
         });
       } catch (error) {
         if (error?.name === "AbortError") {
-          errors.push(`${model.label}: timeout de ${Math.round(AI_REQUEST_TIMEOUT_MS / 1000)}s`);
+          errors.push(`${model.label}: timeout de ${Math.round(attemptTimeoutMs / 1000)}s`);
           break; // timeout longo não melhora trocando de modelo; pula
         }
         errors.push(`${model.label}: ${describeFetchFailure(error)}`);
