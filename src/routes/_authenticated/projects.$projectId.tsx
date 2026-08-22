@@ -680,10 +680,24 @@ function Workspace() {
       );
       return;
     }
-    sendMutation.mutate({
-      message: text || "Analise os anexos e prints manuais enviados e sugira/corrija o site.",
-      attachments: messageAttachments,
-    });
+    // Anexos vão para o job background: o fluxo síncrono embute base64 no
+    // prompt e estoura o timeout da função server ("An unknown error has
+    // occurred"). O background aceita texto extraído (PDF/zip/txt) e segue
+    // com retry/fallback de modelos sem limite de Lambda.
+    const attachmentContext = messageAttachments
+      .map((a) => {
+        if (a.kind === "image")
+          return `[Imagem/print anexado: ${a.name} — baseie o ajuste na descrição do pedido abaixo]`;
+        const extracted = (a.content ?? "").trim();
+        if (!extracted) return `[Anexo: ${a.name} (sem texto extraído)]`;
+        return `[Anexo ${a.name} — conteúdo]:\n${extracted.slice(0, 20_000)}`;
+      })
+      .join("\n\n")
+      .slice(0, 60_000); // truncamento defensivo: 12 anexos x 20k passaria do limite prático da coluna message
+    startBuildJob(
+      `Pedido de ajuste do usuário:\n${text || "Analise os anexos e prints enviados e corrija o site."}\n\n${attachmentContext}\n\nModo Build: atualize os arquivos existentes mantendo o site funcional e aplicando exatamente o ajuste pedido.`,
+      true,
+    );
   };
 
   const readAttachment = async (file: File): Promise<ChatAttachment> => {
@@ -805,42 +819,16 @@ function Workspace() {
     }
   };
 
-  const handleReviewPreview = async () => {
+  const handleReviewPreview = () => {
     if (!hasFiles) return toast.error("Gere o site antes de pedir revisão visual.");
-    const iframeDoc = previewFrameRef.current?.contentDocument;
-    const target = iframeDoc?.documentElement;
-    let screenshot: ChatAttachment | undefined;
-
-    if (target) {
-      try {
-        const canvas = await html2canvas(target, {
-          backgroundColor: iframeDoc.body
-            ? getComputedStyle(iframeDoc.body).backgroundColor
-            : "#ffffff",
-          height: Math.min(target.scrollHeight, 2400),
-          useCORS: true,
-          width: target.clientWidth,
-          windowHeight: Math.min(target.scrollHeight, 2400),
-          windowWidth: target.clientWidth,
-        });
-        screenshot = {
-          name: `preview-${viewport}.png`,
-          type: "image/png",
-          size: 0,
-          kind: "image",
-          content: canvas.toDataURL("image/png"),
-        };
-      } catch {
-        toast.info("Não consegui capturar imagem do preview; vou analisar o HTML renderizado.");
-      }
-    }
-
-    sendMutation.mutate({
-      message:
-        "Faça uma revisão visual automática do preview atual. Analise a captura de tela enviada e encontre problemas de layout, responsividade, contraste, hierarquia visual e acessibilidade. Se houver erro visual, corrija os arquivos completos.",
-      attachments: screenshot ? [screenshot] : undefined,
-      previewSnapshot: { viewport, html: previewDoc },
-    });
+    // Revisão vai para o job background: o fluxo síncrono embutia screenshot
+    // base64 + HTML completo e estourava o timeout da função server ("An
+    // unknown error has occurred"). O engine já carrega os arquivos do
+    // projeto como contexto, então a revisão analisa o código renderizado.
+    startBuildJob(
+      `Pedido de revisão visual do preview atual (viewport ${viewport}). Analise os arquivos do site e procure problemas de layout, responsividade (mobile/tablet/desktop), contraste, hierarquia visual e acessibilidade. Corrija o que estiver errado visualmente.\n\nModo Build: atualize os arquivos existentes mantendo o site funcional e aplicando apenas as correções visuais necessárias.`,
+      true,
+    );
   };
 
   const isCustomWizardOption = (value: string | undefined) =>
