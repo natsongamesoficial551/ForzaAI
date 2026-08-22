@@ -14,6 +14,7 @@ import {
   startGenerationJob,
 } from "@/lib/chat.functions";
 import { publishProject } from "@/lib/projects.functions";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   inviteProjectCollaborator,
   listProjectCollaborators,
@@ -235,6 +236,8 @@ const modelOptions: Array<{
 
 function Workspace() {
   const { projectId } = Route.useParams();
+  // Editor mobile: painéis empilham verticalmente (chat em cima, site embaixo)
+  const isMobile = useIsMobile();
   const [input, setInput] = useState("");
   const [viewport, setViewport] = useState<"desktop" | "tablet" | "mobile">("desktop");
   const [activeFile, setActiveFile] = useState<string | null>(null);
@@ -952,8 +955,8 @@ document.addEventListener('click', function(event) {
 
   return (
     <div className="h-screen flex flex-col">
-      <header className="h-14 border-b border-border px-4 flex items-center gap-3 shrink-0 bg-card/50">
-        <Link to="/dashboard">
+      <header className="h-14 border-b border-border px-2 sm:px-4 flex items-center gap-1.5 sm:gap-3 shrink-0 bg-card/50 overflow-x-auto">
+        <Link to="/dashboard" className="shrink-0">
           <Button variant="ghost" size="sm">
             <ArrowLeft className="size-4" />
           </Button>
@@ -963,33 +966,33 @@ document.addEventListener('click', function(event) {
             {project?.name ?? "Carregando…"}
           </div>
           <div className="text-xs text-muted-foreground flex items-center gap-2">
-            <span>{project?.site_type}</span>
+            <span className="truncate">{project?.site_type}</span>
             {project?.slug && (
-              <span className="flex items-center gap-1 text-accent">
+              <span className="hidden sm:flex items-center gap-1 text-accent">
                 <Globe className="size-3" /> publicado
               </span>
             )}
           </div>
         </div>
         {project?.slug && (
-          <Button size="sm" variant="ghost" asChild>
+          <Button size="sm" variant="ghost" asChild className="shrink-0">
             <a href={`/s/${project.slug}`} target="_blank" rel="noreferrer">
-              <ExternalLink className="size-3.5" /> Ver site
+              <ExternalLink className="size-3.5" /> <span className="hidden sm:inline">Ver site</span>
             </a>
           </Button>
         )}
-        <Button size="sm" variant="outline" onClick={() => setModelOpen(true)}>
-          <Brain className="size-3.5" /> {selectedModelOption.label}
+        <Button size="sm" variant="outline" onClick={() => setModelOpen(true)} className="shrink-0">
+          <Brain className="size-3.5" /> <span className="hidden md:inline">{selectedModelOption.label}</span>
         </Button>
-        <Button size="sm" variant="outline" onClick={() => setSkillsOpen(true)}>
-          <Sparkles className="size-3.5" /> Skills
+        <Button size="sm" variant="outline" onClick={() => setSkillsOpen(true)} className="shrink-0">
+          <Sparkles className="size-3.5" /> <span className="hidden sm:inline">Skills</span>
         </Button>
-        <Button size="sm" variant="outline" onClick={() => setCollabOpen(true)}>
-          <Users className="size-3.5" /> Colaborar
+        <Button size="sm" variant="outline" onClick={() => setCollabOpen(true)} className="shrink-0">
+          <Users className="size-3.5" /> <span className="hidden sm:inline">Colaborar</span>
         </Button>
         <Button
           size="sm"
-          className="bg-gradient-primary"
+          className="bg-gradient-primary shrink-0"
           onClick={() => (project?.slug ? setPublishOpen(true) : publishMutation.mutate())}
           disabled={!hasFiles || publishMutation.isPending}
         >
@@ -998,12 +1001,14 @@ document.addEventListener('click', function(event) {
           ) : (
             <Rocket className="size-3.5" />
           )}
-          {project?.slug ? "Compartilhar" : "Publicar"}
+          <span className="hidden sm:inline">{project?.slug ? "Compartilhar" : "Publicar"}</span>
         </Button>
       </header>
 
-      <ResizablePanelGroup direction="horizontal" className="flex-1">
-        <ResizablePanel defaultSize={32} minSize={22}>
+      {/* Mobile: painéis empilhados (chat em cima, preview embaixo). A barra
+          de redimensionamento horizontal fica inválida no modo vertical. */}
+      <ResizablePanelGroup direction={isMobile ? "vertical" : "horizontal"} className="flex-1">
+        <ResizablePanel defaultSize={isMobile ? 45 : 32} minSize={isMobile ? 25 : 22}>
           <div className="h-full flex flex-col bg-card/30">
             <div className="px-4 py-3 border-b border-border text-sm font-semibold flex items-center justify-between gap-2">
               <span className="flex items-center gap-2">
@@ -1337,9 +1342,9 @@ document.addEventListener('click', function(event) {
         </ResizablePanel>
         <ResizableHandle />
 
-        <ResizablePanel defaultSize={68}>
+        <ResizablePanel defaultSize={isMobile ? 55 : 68}>
           <Tabs defaultValue="preview" className="h-full flex flex-col">
-            <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2">
+            <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2 flex-wrap">
               <TabsList className="bg-card">
                 <TabsTrigger value="preview">
                   <Eye className="size-3.5 mr-1.5" />
@@ -1402,7 +1407,12 @@ document.addEventListener('click', function(event) {
                   ) : (
                     <Camera className="size-3.5" />
                   )}
-                  Print manual{manualSnapshots.length > 0 ? ` (${manualSnapshots.length})` : ""}
+                  <span className="hidden sm:inline">
+                    Print manual{manualSnapshots.length > 0 ? ` (${manualSnapshots.length})` : ""}
+                  </span>
+                  {manualSnapshots.length > 0 && (
+                    <span className="sm:hidden text-xs">{manualSnapshots.length}</span>
+                  )}
                 </Button>
                 <Button
                   size="sm"
@@ -1416,7 +1426,7 @@ document.addEventListener('click', function(event) {
                   }
                   title="Analisar preview com IA"
                 >
-                  <Sparkles className="size-3.5" /> Revisar visual
+                  <Sparkles className="size-3.5" /> <span className="hidden sm:inline">Revisar visual</span>
                 </Button>
                 {project?.slug && (
                   <Button
