@@ -28,9 +28,25 @@ export const Route = createFileRoute("/s/$slug")({
           .select("path, content")
           .eq("project_id", project.id);
 
-        const html = files?.find((f) => f.path === "index.html")?.content ?? "";
+        const rawHtml = files?.find((f) => f.path === "index.html")?.content ?? "";
         const css = files?.find((f) => f.path === "styles.css")?.content ?? "";
         const js = files?.find((f) => f.path === "script.js")?.content ?? "";
+
+        // Alguns modelos salvam o HTML escapado (&lt;!DOCTYPE...) — des-escapa
+        // para o site publicado renderizar a página, não o código como texto.
+        const looksEscaped = /&lt;(!doctype|html|head|body|main|section|div|style|script)\b/i.test(rawHtml);
+        const hasRawTags = /<(?:!doctype|html|head|body)\b/i.test(rawHtml);
+        const html =
+          looksEscaped && !hasRawTags
+            ? rawHtml
+                .replace(/&lt;/g, "<")
+                .replace(/&gt;/g, ">")
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'")
+                .replace(/&#x27;/g, "'")
+                .replace(/&amp;/g, "&")
+                .trim()
+            : rawHtml;
 
         // React/JSX: shell referencia text/babel ou o script contém JSX —
         // precisa do Babel standalone (com CDNs se o shell não trouxer).

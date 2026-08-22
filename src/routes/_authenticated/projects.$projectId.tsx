@@ -885,7 +885,22 @@ function Workspace() {
   };
 
   const currentFile = files?.find((f) => f.path === activeFile) ?? files?.[0];
-  const html = files?.find((f) => f.path === "index.html")?.content ?? "";
+  // Alguns modelos salvam o HTML escapado (&lt;!DOCTYPE...) — des-escapa para
+  // o preview renderizar a página em vez do código como texto.
+  const unescapeIfEscaped = (raw: string) => {
+    const looksEscaped = /&lt;(!doctype|html|head|body|main|section|div|style|script)\b/i.test(raw);
+    const hasRawTags = /<(?:!doctype|html|head|body)\b/i.test(raw);
+    if (!looksEscaped || hasRawTags) return raw;
+    return raw
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&#x27;/g, "'")
+      .replace(/&amp;/g, "&")
+      .trim();
+  };
+  const html = unescapeIfEscaped(files?.find((f) => f.path === "index.html")?.content ?? "");
   const css = files?.find((f) => f.path === "styles.css")?.content ?? "";
   const js = files?.find((f) => f.path === "script.js")?.content ?? "";
 

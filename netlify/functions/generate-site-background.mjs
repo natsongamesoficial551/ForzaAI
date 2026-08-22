@@ -50,7 +50,7 @@ function getEnrichedContract(baseContract) {
 const RESPONSIVE_RULES =
   "RESPONSIVIDADE OBRIGATÓRIA (celulares de 320px a 430px, tablets 768–1024px, desktop): mobile-first com tipografia e espaçamentos fluidos via clamp(); breakpoints @media (max-width) em 1024px, 768px, 560px, 430px e 360px; grids colapsam para 1–2 colunas até 560px (prefira repeat(auto-fit, minmax(min(100%,260px),1fr))); ZERO scroll horizontal (overflow-x:clip no body, nunca width/min-width fixos maiores que 100%, cuide de white-space:nowrap e posicionamentos absolutos que transbordem); imagens e vídeos max-width:100% com aspect-ratio; alvos de toque mínimos de 44x44px; menu hamburguer funcional abaixo de 768px; heroes com min-height:100dvh (fallback 100vh), nunca 100vh puro; respeite env(safe-area-inset-*) em elementos fixos; o HTML precisa de <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">; valide mentalmente em 320px: nada pode cortar, transbordar ou sobrepor.";
 
-export const ENGINE_VERSION = "2.5.0-idle-guard";
+export const ENGINE_VERSION = "2.5.1-unescape";
 
 // 10 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free,
 // mas provedores/gateways (9router) podem ficar bem mais lentos em pico.
@@ -208,9 +208,13 @@ function normalizeGeneratedFiles(text, projectName) {
 // delimitado de 3 arquivos.
 function parseFormatOutput(text, projectName, outputFormat) {
   if (outputFormat === "single-html") {
+    // Des-escapa (modelos que devolvem &lt;html&gt;) e remove fence antes de
+    // extrair o doc — sem isso o regex não casa e o reparo descarta a resposta.
+    const clean = unescapeHtmlContent(stripThinking(String(text || "")));
+    const unfenced = clean.match(/```[a-zA-Z0-9]*\s*([\s\S]*?)```/)?.[1]?.trim() ?? clean;
     const doc =
-      String(text || "").match(/<!doctype html[\s\S]*?<\/html>/i)?.[0] ??
-      String(text || "").match(/<html[\s\S]*?<\/html>/i)?.[0] ??
+      unfenced.match(/<!doctype html[\s\S]*?<\/html>/i)?.[0] ??
+      unfenced.match(/<html[\s\S]*?<\/html>/i)?.[0] ??
       "";
     return doc.trim() ? [{ path: "index.html", language: "html", content: doc.trim() }] : null;
   }
@@ -673,9 +677,33 @@ function stripThinking(text) {
     .trim();
 }
 
+// Alguns modelos (principalmente thinking no fallback sem thinking) devolvem
+// o HTML inteiro ESCAPADO (&lt;!DOCTYPE...) — salvo assim, o preview/site
+// renderiza o código como texto em vez da página. Des-escapa quando o
+// conteúdo claramente veio escapado por inteiro (há tags escapadas e NÃO há
+// tags HTML cruas). &amp; por último preserva entidades legítimas duplamente
+// escapadas (&amp;lt; continua &lt;).
+function unescapeHtmlContent(text) {
+  const t = String(text || "");
+  const looksEscaped = /&lt;(!doctype|html|head|body|main|section|div|header|footer|style|script)\b/i.test(t);
+  const hasRawTags = /<(?:!doctype|html|head|body)\b/i.test(t);
+  if (!looksEscaped || hasRawTags) return t;
+  return t
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&amp;/g, "&")
+    .trim();
+}
+
 function sanitizeGeneratedFile(text, kind) {
-  let t = stripThinking(text);
+  let t = unescapeHtmlContent(stripThinking(text));
   if (!t) return t;
+  // Remove cerca de código (```html ... ```) se o modelo embrulhou o arquivo
+  const fence = t.match(/```[a-zA-Z0-9]*\s*([\s\S]*?)```/);
+  if (fence && fence[1].trim().length >= 200) t = fence[1].trim();
   const patterns = {
     css: /(^|\n)\s*(?:\/\*|@(?:import|charset|font-face|layer|media|supports|keyframes|property|container)\b|[^\n{}]*\{)/,
     js: /(^|\n)\s*(?:\/\*|\/\/|['"`]|!|import\s|export\s|const\s|let\s|var\s|function\s|async\s|class\s|document\.|window\.|\()/,
