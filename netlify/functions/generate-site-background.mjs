@@ -50,7 +50,7 @@ function getEnrichedContract(baseContract) {
 const RESPONSIVE_RULES =
   "Responsivo mobile-first: <meta viewport> no HTML; @media (max-width) 768px e 480px colapsando grids para 1 coluna; tipografia clamp(); sem scroll horizontal; botões ≥44px; menu hamburguer <768px; nunca 100vh puro (use min-height). Seja CONCISO: cada regra CSS deve ter propósito — prefira qualidade a quantidade.";
 
-export const ENGINE_VERSION = "2.6.0-lean-context";
+export const ENGINE_VERSION = "2.6.1-cloudflare-gateway";
 
 // 10 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free,
 // mas provedores/gateways (9router) podem ficar bem mais lentos em pico.
@@ -522,6 +522,23 @@ function retryAfterMs(response, fallbackMs) {
   return fallbackMs;
 }
 
+function isGatewayStatus(status) {
+  // 52x/530 são páginas de erro do Cloudflare/gateway (ex.: Origin DNS,
+  // tunnel/proxy indisponível). Não são resposta do modelo.
+  return status === 502 || status === 503 || status === 504 || (status >= 520 && status <= 530);
+}
+
+function compactProviderErrorDetail(text) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!t) return "sem corpo de erro";
+  if (/<!doctype|<html\b|cloudflare|cf-error-code|error\s+\d{3}/i.test(t)) {
+    const title = t.match(/<title>(.*?)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim();
+    const cfCode = t.match(/Error\s+(\d{3})/i)?.[1];
+    return title || (cfCode ? `página HTML de erro Cloudflare ${cfCode}` : "página HTML de erro do gateway/provedor");
+  }
+  return t.slice(0, 180);
+}
+
 // Extrai o primeiro objeto JSON balanceado de um corpo que pode ser JSON puro,
 // SSE ("data: {...}\n\ndata: [DONE]") ou JSON colado com sufixo SSE. Retorna null se não achar.
 function parseGatewayPayload(raw) {
@@ -822,10 +839,11 @@ async function fetchAiText(modelOrModels, body, context = {}) {
         stage: `Forza Engine: ${previous.label} falhou, tentando ${model.label}…`,
       });
     }
-    // Com fallback disponível, não insistimos 4x num modelo morto:
-    // 1 tentativa rápida + troca imediata. Só o modelo ÚNICO ganha as
-    // 4 tentativas com backoff (não há para onde trocar).
-    const maxAttempts = models.length > 1 ? 1 : 4;
+    // Com fallback disponível, não insistimos 4x num modelo morto, mas damos
+    // 2 tentativas curtas: Cloudflare/530 costuma ser falha transitória do
+    // gateway do provedor e todos os fallbacks podem estar atrás dele.
+    // Modelo único mantém 4 tentativas com backoff.
+    const maxAttempts = models.length > 1 ? 2 : 4;
     const retryWaitBaseMs = models.length > 1 ? 5_000 : 20_000;
     // Timeout por tentativa: quando há fallback, não vale queimar o budget
     // inteiro num modelo só. Com stream:true os chunks fluem continuamente,
@@ -879,9 +897,9 @@ async function fetchAiText(modelOrModels, body, context = {}) {
         clearTimeout(timeout);
       }
 
-      if ((response.status === 429 || response.status === 502 || response.status === 503 || response.status === 504 || response.status === 524) && attempt < maxAttempts) {
+      if ((response.status === 429 || isGatewayStatus(response.status)) && attempt < maxAttempts) {
         const waitMs = retryAfterMs(response, response.status === 429 ? attempt * 30_000 : attempt * retryWaitBaseMs);
-        const reason = response.status === 429 ? "limite do provedor atingido" : `gateway/timeout do provedor (${response.status})`;
+        const reason = response.status === 429 ? "limite do provedor atingido" : `gateway/provedor indisponível (${response.status})`;
         await updateJob(context.supabase, context.jobId, {
           stage: `Forza Engine: ${reason}; aguardando ${Math.round(waitMs / 1000)}s antes de tentar novamente (${attempt}/${maxAttempts - 1})…`,
         });
@@ -891,7 +909,7 @@ async function fetchAiText(modelOrModels, body, context = {}) {
 
       if (!response.ok) {
         const text = await response.text().catch(() => "");
-        const detail = text.replace(/\s+/g, " ").slice(0, 240);
+        const detail = compactProviderErrorDetail(text);
         if (response.status === 401 || response.status === 403) {
           errors.push(`${model.label}: falha de autenticação (confira API key/provider)`);
           break; // config problem — não adianta trocar de modelo
@@ -912,8 +930,8 @@ async function fetchAiText(modelOrModels, body, context = {}) {
           errors.push(`${model.label}: limite atingido mesmo após ${maxAttempts - 1} tentativas`);
           break;
         }
-        if (response.status === 502 || response.status === 503 || response.status === 504 || response.status === 524 || /bad gateway|gateway timeout|<html/i.test(text)) {
-          errors.push(`${model.label}: gateway/instabilidade (${response.status}) — ${detail}`);
+        if (isGatewayStatus(response.status) || /bad gateway|gateway timeout|<html/i.test(text)) {
+          errors.push(`${model.label}: gateway/provedor indisponível (${response.status}) — ${detail}`);
           break; // gateway instável: trocar de modelo pode resolver
         }
         errors.push(`${model.label}: falha (${response.status}) — ${detail}`);
