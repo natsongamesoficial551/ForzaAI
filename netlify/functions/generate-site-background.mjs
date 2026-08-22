@@ -48,9 +48,9 @@ function getEnrichedContract(baseContract) {
 // celulares variam de 320px (iPhone SE) a 430px+ (Pro Max/foldables) — os
 // breakpoints fixos 768/480 não cobrem essa faixa sozinhos.
 const RESPONSIVE_RULES =
-  "RESPONSIVIDADE OBRIGATÓRIA (celulares de 320px a 430px, tablets 768–1024px, desktop): mobile-first com tipografia e espaçamentos fluidos via clamp(); breakpoints @media (max-width) em 1024px, 768px, 560px, 430px e 360px; grids colapsam para 1–2 colunas até 560px (prefira repeat(auto-fit, minmax(min(100%,260px),1fr))); ZERO scroll horizontal (overflow-x:clip no body, nunca width/min-width fixos maiores que 100%, cuide de white-space:nowrap e posicionamentos absolutos que transbordem); imagens e vídeos max-width:100% com aspect-ratio; alvos de toque mínimos de 44x44px; menu hamburguer funcional abaixo de 768px; heroes com min-height:100dvh (fallback 100vh), nunca 100vh puro; respeite env(safe-area-inset-*) em elementos fixos; o HTML precisa de <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">; valide mentalmente em 320px: nada pode cortar, transbordar ou sobrepor.";
+  "Responsivo mobile-first: <meta viewport> no HTML; @media (max-width) 768px e 480px colapsando grids para 1 coluna; tipografia clamp(); sem scroll horizontal; botões ≥44px; menu hamburguer <768px; nunca 100vh puro (use min-height). Seja CONCISO: cada regra CSS deve ter propósito — prefira qualidade a quantidade.";
 
-export const ENGINE_VERSION = "2.5.1-unescape";
+export const ENGINE_VERSION = "2.6.0-lean-context";
 
 // 10 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free,
 // mas provedores/gateways (9router) podem ficar bem mais lentos em pico.
@@ -740,6 +740,57 @@ function cutForeignTail(text, kind) {
   return text;
 }
 
+// Esqueleto estrutural do HTML: mantém tags estruturais + classes/ids +
+   // elementos interativos (com data-attributes), remove copy/texto. Corta o
+   // contexto de geração de CSS/JS em ~80% — o modelo não precisa ler o texto
+   // para estilizar/programar, só a estrutura.
+function htmlSkeleton(html) {
+  return String(html || "")
+    .replace(/<(script|style|svg|noscript)\b[\s\S]*?<\/\1>/gi, "")
+    .replace(/>([^<>]{60,})</g, "><") // textos longos viram vazio
+    .replace(/\s{2,}/g, " ")
+    .slice(0, 24_000)
+    .trim();
+}
+
+// Detecta arquivo truncado: contagem de chaves/parênteses desbalanceada em
+// JS/CSS, doc sem </html>. Gateway corta output mesmo com max_tokens alto.
+function isTruncated(content, kind) {
+  const t = String(content || "").trim();
+  if (!t) return true;
+  if (kind === "html") return !/<\/html>/i.test(t);
+  const balance = (str, open, close) => {
+    let depth = 0;
+    let inString = false;
+    let quote = "";
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (inString) {
+        if (ch === quote && str[i - 1] !== "\\") inString = false;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") {
+        inString = true;
+        quote = ch;
+        continue;
+      }
+      if (ch === open) depth++;
+      else if (ch === close) depth--;
+    }
+    return depth;
+  };
+  if (kind === "js") {
+    // remove comentários e strings antes de contar
+    const code = t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "").replace(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g, '""');
+    return balance(code, "{", "}") !== 0 || balance(code, "(", ")") !== 0;
+  }
+  if (kind === "css") {
+    const code = t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(["'])(?:\\.|(?!\1)[^\\])*\1/g, '""');
+    return balance(code, "{", "}") !== 0;
+  }
+  return false;
+}
+
 // Formato de saída conforme o pedido do usuário:
 // - three-files (default): index.html + styles.css + script.js
 // - single-html: um único index.html self-contained (CSS/JS inline)
@@ -1353,7 +1404,7 @@ function analyzeGeneratedSite(project, job, files) {
   // (~980px virtual); com poucos breakpoints, telas de 320-430px quebram.
   if (!/<meta[^>]+name=["']viewport["']/i.test(html)) addBlocking('HTML sem <meta name="viewport"> — mobile renderiza como desktop.', 'Inclua <meta name="viewport" content="width=device-width, initial-scale=1"> no <head>.');
   const mediaBreakpoints = (effectiveCss.match(/@media\b/g) || []).length;
-  if (mediaBreakpoints < 3) addWarning("CSS com poucos breakpoints responsivos para a faixa de celulares (320–430px).", "Adicione @media (max-width) em 768px, 560px e 430px/360px com grids colapsando para 1 coluna e sem scroll horizontal.");
+  if (mediaBreakpoints < 2) addWarning("CSS com poucos breakpoints responsivos para a faixa de celulares (320–430px).", "Adicione @media (max-width) em 768px e 480px com grids colapsando para 1 coluna e sem scroll horizontal.");
   if (!isReact) {
     if (!metrics.hasMain) addBlocking("HTML sem tag <main> semântica.", "Adicione <main> envolvendo o conteúdo principal com hero e seções reais.");
     if (visibleText.length < Math.max(900, minimums.visibleText - 400)) addBlocking("Body sem conteúdo real suficiente.", `Expanda a copy visível para pelo menos ${minimums.visibleText} caracteres com conteúdo específico do briefing.`);
@@ -1592,8 +1643,8 @@ ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}
     // Formato de saída conforme o pedido (default: 3 arquivos).
     const outputFormat = detectOutputFormat(`${job.message ?? ""}\n${project.description ?? ""}`);
     const antiTruncate =
-      "CRÍTICO: entregue o arquivo COMPLETO e sintaticamente fechado — nunca corte no meio; todas as funções, chaves, parênteses e blocos devem fechar. Se estiver longo, simplifique detalhes internos, mas NÃO trunque. Sem comentários de explicação fora de código.";
-    const maxTokens = 16_000;
+      "Entregue o arquivo COMPLETO e fechado — nunca corte no meio (chaves/parênteses fechados, </html> no fim). Se estiver longo, SIMPLIFIQUE o conteúdo interno em vez de truncar. CONCISÃO: sem comentários explicativos, sem código morto, sem repetição de padrões.";
+    const maxTokens = 8_000;
 
     let stages;
     if (outputFormat === "single-html") {
@@ -1627,17 +1678,17 @@ ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}
         {
           key: "index.html",
           stage: "Forza Engine: gerando HTML…",
-          system: `Você é o gerador de sites premium do ForzaAI. Gere APENAS o conteúdo do index.html completo (sem markdown, sem cercas de código, sem explicação). ${designBrief}\nRegras: site completo e publicável; hero impactante e denso no topo com título + subtítulo + 2 CTAs + apoio visual (stats ou card flutuante); mínimo ${typeRequirements.minimums.sections + 2} seções reais (${typeRequirements.required_sections.join(", ")}) incluindo depoimentos ou FAQ quando couber e footer rico em colunas; semântico (<main>, <section>, <header>, <footer>); links para styles.css e script.js; copy específica em português do Brasil com pelo menos ${typeRequirements.minimums.visibleText} caracteres visíveis; ${typeRequirements.minimums.cards}+ cards/itens com dados realistas (nomes, números, preços quando couber); formulários com <label>; zero placeholders/TODO/lorem. NÃO inclua <style> nem <script> inline — todo CSS vai em styles.css e todo JS em script.js. HTML mobile-friendly: <meta name="viewport" content="width=device-width, initial-scale=1">, botão de menu hamburguer no header, grids em <div> colapsáveis e texto sem larguras fixas. ${antiTruncate}`,
+          system: `Você é o gerador de sites premium do ForzaAI. Gere APENAS o conteúdo do index.html completo (sem markdown, sem cercas de código, sem explicação). ${designBrief}\nRegras: site completo e publicável; hero impactante e denso no topo com título + subtítulo + 2 CTAs + apoio visual (stats ou card flutuante); mínimo ${typeRequirements.minimums.sections + 2} seções reais (${typeRequirements.required_sections.join(", ")}) incluindo depoimentos ou FAQ quando couber e footer rico em colunas; semântico (<main>, <section>, <header>, <footer>); links para styles.css e script.js; copy específica em português do Brasil com pelo menos ${typeRequirements.minimums.visibleText} caracteres visíveis; ${typeRequirements.minimums.cards}+ cards/itens com dados realistas (nomes, números, preços quando couber); formulários com <label>; zero placeholders/TODO/lorem. NÃO inclua <style> nem <script> inline — todo CSS vai em styles.css e todo JS em script.js. HTML mobile-friendly: <meta name="viewport" content="width=device-width, initial-scale=1">, botão de menu hamburguer no header, grids colapsáveis e texto sem larguras fixas. ${antiTruncate}`,
         },
         {
           key: "styles.css",
           stage: "Forza Engine: gerando CSS…",
-          system: `Você é o designer CSS sênior do ForzaAI. Recebe o HTML já gerado e produz APENAS o conteúdo do styles.css completo (sem markdown, sem explicação). ${designBrief}\nRegras: CSS profissional com variáveis (:root), tipografia Google Fonts (@import) com hierarquia clara, layout Grid/Flexbox, estados hover/focus/active, microinterações (transform, filter, box-shadow), @keyframes de entrada/pulsação/flutuação, transições suaves com cubic-bezier, no mínimo ${typeRequirements.minimums.cssRules + 30} regras, primeira dobra visualmente densa (sem área branca dominante), scrollbar customizada, ::selection, acessibilidade (contraste, focus-visible) e prefers-reduced-motion. ${RESPONSIVE_RULES} Estilize TODAS as classes/ids presentes no HTML. ${antiTruncate}`,
+          system: `Você é o designer CSS sênior do ForzaAI. Recebe a estrutura do HTML já gerado e produz APENAS o conteúdo do styles.css completo (sem markdown, sem explicação, sem comentários). ${designBrief}\nRegras: CSS profissional e ENXUTO com variáveis (:root), Google Fonts (@import), Grid/Flexbox, hover/focus, microinterações pontuais, transições, acessibilidade (focus-visible) e prefers-reduced-motion. ${RESPONSIVE_RULES} Estilize todas as classes/ids da estrutura. Cada regra com propósito — sem regra decorativa vazia. ${antiTruncate}`,
         },
         {
           key: "script.js",
           stage: "Forza Engine: gerando JavaScript…",
-          system: `Você é o desenvolvedor JS sênior do ForzaAI. Recebe o HTML já gerado e produz APENAS o conteúdo do script.js completo (sem markdown, sem explicação). Regras: JS puro sem dependências, sem eval, sem segredos. Implemente comportamento real para TODO elemento interativo do HTML: header com scroll-spy e sombra ao rolar, menu mobile acessível, navegação âncora suave com offset, tabs, FAQ accordion exclusivo, formulários com validação + mensagens de sucesso/erro simuladas, carrinho com localStorage quando existir, contadores animados, reveals on-scroll com stagger via IntersectionObserver, tilt 3D leve em cards quando couber, toasts de feedback. defer-safe (DOMContentLoaded). Compatível com as classes/ids do HTML fornecido. ${antiTruncate}`,
+          system: `Você é o desenvolvedor JS sênior do ForzaAI. Recebe a estrutura do HTML já gerado e produz APENAS o conteúdo do script.js completo (sem markdown, sem explicação, sem comentários). Regras: JS puro enxuto, sem eval, sem segredos. Implemente o essencial para TODO elemento interativo: menu mobile, navegação âncora suave com offset, FAQ accordion/tabs, formulário com validação + feedback simulado, carrinho com localStorage quando existir, reveals on-scroll via IntersectionObserver. defer-safe (DOMContentLoaded). Compatível com as classes/ids da estrutura fornecida. Funções pequenas e diretas. ${antiTruncate}`,
         },
       ];
     }
@@ -1649,11 +1700,14 @@ ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}
     for (const stage of stages) {
       if (remainingBudgetMs() < 90_000) throw new Error("Tempo do motor esgotado antes de completar todos os arquivos.");
       await updateJob(supabase, job.id, { stage: stage.stage });
+      // Contexto esquelético: o modelo não precisa da copy para estilizar/
+      // programar — só da estrutura. Corta ~80% do input (era o HTML completo,
+      // que inflava o contexto e comprimia o espaço de output -> truncamento).
       const contextFiles =
         stage.key === "index.html" || outputFormat === "single-html"
           ? ""
-          : `\n\nShell HTML já gerado (estilize/programe exatamente essas marcações):\n${html}`;
-      const content = await fetchAiText(
+          : `\n\nEstrutura do HTML já gerado (estilize/programe exatamente essas marcações):\n${htmlSkeleton(html)}`;
+      let content = await fetchAiText(
         model,
         {
           stream: false,
@@ -1668,9 +1722,32 @@ ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}
       );
       // Sanitiza: modelos thinking podem prefixar raciocínio/prosa no content,
       // o que corrompe CSS/JS no preview (bug "HTML puro").
-      if (stage.key === "index.html") html = sanitizeGeneratedFile(content, "html");
-      else if (stage.key === "styles.css") css = sanitizeGeneratedFile(content, "css");
-      else js = sanitizeGeneratedFile(content, "js");
+      let sanitized = sanitizeGeneratedFile(content, stage.key.split(".").pop() === "html" ? "html" : stage.key.endsWith(".css") ? "css" : "js");
+      // Gateway corta output mesmo com max_tokens alto: se o arquivo veio
+      // truncado (chaves desbalanceadas / sem </html>), UMA retentativa
+      // exigindo concisão — arquivo menor cabe no limite de tokens.
+      if (isTruncated(sanitized, stage.key.endsWith(".html") ? "html" : stage.key.endsWith(".css") ? "css" : "js") && remainingBudgetMs() > 120_000) {
+        await updateJob(supabase, job.id, { stage: `${stage.stage} (arquivo veio incompleto, refazendo enxuto…)` });
+        console.warn("[forza engine] truncated output regenerating leaner", stage.key, { chars: sanitized.length });
+        content = await fetchAiText(
+          model,
+          {
+            stream: false,
+            temperature: 0.3,
+            max_tokens: maxTokens,
+            messages: [
+              { role: "system", content: stage.system },
+              { role: "user", content: `${requestContext}${contextFiles}\n\nIMPORTANTE: sua resposta anterior foi CORTADA por limite de tokens. Refaça o arquivo COMPLETO porém MAIS ENXUTO: reduza seções repetidas, simplifique detalhes, corte comentários — o arquivo inteiro deve caber. Termine obrigatoriamente com o bloco fechado (${stage.key === "index.html" ? "</html>" : stage.key === "styles.css" ? "última regra } fechada" : "IIFE/init fechado"}).` },
+            ],
+          },
+          { supabase, jobId: job.id },
+        );
+        const retry = sanitizeGeneratedFile(content, stage.key.endsWith(".html") ? "html" : stage.key.endsWith(".css") ? "css" : "js");
+        if (!isTruncated(retry, stage.key.endsWith(".html") ? "html" : stage.key.endsWith(".css") ? "css" : "js") || retry.length > sanitized.length) sanitized = retry;
+      }
+      if (stage.key === "index.html") html = sanitized;
+      else if (stage.key === "styles.css") css = sanitized;
+      else js = sanitized;
       await saveArtifact(supabase, run.id, "model_raw_output", { stage: stage.key, content: content.slice(0, 120_000) });
     }
 
