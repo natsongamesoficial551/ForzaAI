@@ -1330,17 +1330,29 @@ export const generateProjectWizard = createServerFn({ method: "POST" })
       ]);
 
       if (classificationRes.status === "fulfilled") {
-        classification = normalizeClassification(
-          extractJson(classificationRes.value),
-          fallbackClassification,
-        );
+        // Resposta fulfillled pode não conter JSON (ex.: modelos que obedecem
+        // ao prompt do usuário em vez do system e devolvem texto/HTML). Sem
+        // este try/catch o handler inteiro quebra -> "An unknown error has
+        // occurred". Fallback local cobre o caso.
+        try {
+          classification = normalizeClassification(
+            extractJson(classificationRes.value),
+            fallbackClassification,
+          );
+        } catch (error) {
+          console.warn("[wizard] classification parse fallback", error);
+        }
       } else {
         console.warn("[wizard] classification fallback", classificationRes.reason);
       }
 
       if (questionsRes.status === "fulfilled") {
-        const modelWizard = normalizeWizard(extractJson(questionsRes.value));
-        if (modelWizard.questions.length >= 4) wizard = modelWizard;
+        try {
+          const modelWizard = normalizeWizard(extractJson(questionsRes.value));
+          if (modelWizard.questions.length >= 4) wizard = modelWizard;
+        } catch (error) {
+          console.warn("[wizard] questions parse fallback", error);
+        }
       } else {
         console.warn("[wizard] contextual questions fallback", questionsRes.reason);
       }
