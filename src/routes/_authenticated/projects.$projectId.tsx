@@ -247,6 +247,7 @@ const modelOptions: Array<{
 
 function Workspace() {
   const { projectId } = Route.useParams();
+  const activeJobStorageKey = `active-generation-job:${projectId}`;
   // Editor mobile: painéis empilham verticalmente (chat em cima, site embaixo)
   const isMobile = useIsMobile();
   const [input, setInput] = useState("");
@@ -273,7 +274,10 @@ function Workspace() {
   const [capturingSnapshot, setCapturingSnapshot] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ForzaModelId>("forza-1-flash");
   const [modelOpen, setModelOpen] = useState(false);
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem(activeJobStorageKey);
+  });
   const completedJobRef = useRef<string | null>(null);
   const qc = useQueryClient();
   const wizardFn = useServerFn(generateProjectWizard);
@@ -290,6 +294,15 @@ function Workspace() {
   const toggleProjectSkillFn = useServerFn(toggleProjectSkill);
   const scrollRef = useRef<HTMLDivElement>(null);
   const previewFrameRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    const savedJobId = localStorage.getItem(activeJobStorageKey);
+    setActiveJobId(savedJobId);
+    if (savedJobId) {
+      completedJobRef.current = null;
+      setStreaming({ status: "Retomando geração em background…", chars: 0 });
+    }
+  }, [activeJobStorageKey]);
 
   const { data: project } = useQuery({
     queryKey: ["project", projectId],
@@ -416,6 +429,7 @@ function Workspace() {
     onSuccess: (job) => {
       completedJobRef.current = null;
       setActiveJobId(job.id);
+      localStorage.setItem(activeJobStorageKey, job.id);
       setStreaming({ status: job.stage ?? "Na fila para gerar…", chars: 0 });
       toast.info("Geração iniciada em background.");
     },
@@ -428,6 +442,9 @@ function Workspace() {
   const { data: activeJob } = useQuery({
     queryKey: ["generation-job", activeJobId],
     enabled: !!activeJobId,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status === "completed" || status === "failed" ? false : 2500;
@@ -460,6 +477,7 @@ function Workspace() {
     if (activeJob.status === "completed" && completedJobRef.current !== activeJob.id) {
       completedJobRef.current = activeJob.id;
       setActiveJobId(null);
+      localStorage.removeItem(activeJobStorageKey);
       qc.invalidateQueries({ queryKey: ["messages", projectId] });
       qc.invalidateQueries({ queryKey: ["files", projectId] });
       qc.invalidateQueries({ queryKey: ["file-versions", projectId] });
@@ -472,9 +490,10 @@ function Workspace() {
     if (activeJob.status === "failed" && completedJobRef.current !== activeJob.id) {
       completedJobRef.current = activeJob.id;
       setActiveJobId(null);
+      localStorage.removeItem(activeJobStorageKey);
       toast.error(activeJob.error || "A geração falhou em background.");
     }
-  }, [activeJob, projectId, profile?.sound_enabled, qc]);
+  }, [activeJob, activeJobStorageKey, projectId, profile?.sound_enabled, qc]);
 
   const sendMutation = useMutation({
     mutationFn: async ({
