@@ -141,3 +141,37 @@ export const publishProject = createServerFn({ method: "POST" })
 
     return { slug };
   });
+
+const VisualEditorFileSchema = z.object({
+  path: z.enum(["index.html", "styles.css", "script.js"]),
+  content: z.string().min(1).max(2_500_000),
+});
+
+export const saveVisualEditorFiles = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        projectId: z.string().uuid(),
+        files: z.array(VisualEditorFileSchema).min(1).max(3),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const { data: canEdit, error: permissionError } = await context.supabase.rpc(
+      "can_edit_project",
+      { _project_id: data.projectId, _user_id: context.userId },
+    );
+    if (permissionError || !canEdit) throw new Error("Sem permissão para editar este projeto.");
+
+    for (const file of data.files) {
+      const { error } = await context.supabase
+        .from("project_files")
+        .update({ content: file.content, updated_at: new Date().toISOString() })
+        .eq("project_id", data.projectId)
+        .eq("path", file.path);
+      if (error) throw error;
+    }
+
+    return { filesUpdated: data.files.length };
+  });

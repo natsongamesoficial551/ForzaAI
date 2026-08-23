@@ -13,7 +13,7 @@ import {
   sendChatMessage,
   startGenerationJob,
 } from "@/lib/chat.functions";
-import { publishProject } from "@/lib/projects.functions";
+import { publishProject, saveVisualEditorFiles } from "@/lib/projects.functions";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   inviteProjectCollaborator,
@@ -58,6 +58,8 @@ import {
   Camera,
   Trash2,
   MousePointer2,
+  SlidersHorizontal,
+  Save,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { notifyGenerationComplete, playInterfaceSound } from "@/lib/client-feedback";
@@ -91,7 +93,61 @@ type PreviewSelection = {
   text?: string;
   selector: string;
   html?: string;
+  styles?: Record<string, string>;
 };
+
+type VisualEditValues = {
+  text: string;
+  color: string;
+  backgroundColor: string;
+  fontSize: string;
+  fontFamily: string;
+  fontWeight: string;
+  textAlign: string;
+  width: string;
+  height: string;
+  padding: string;
+  margin: string;
+  borderRadius: string;
+  borderWidth: string;
+  borderColor: string;
+  opacity: string;
+  imageSrc: string;
+};
+
+const emptyVisualEdit: VisualEditValues = {
+  text: "",
+  color: "#111111",
+  backgroundColor: "#ffffff",
+  fontSize: "",
+  fontFamily: "",
+  fontWeight: "",
+  textAlign: "",
+  width: "",
+  height: "",
+  padding: "",
+  margin: "",
+  borderRadius: "",
+  borderWidth: "",
+  borderColor: "#000000",
+  opacity: "1",
+  imageSrc: "",
+};
+
+const visualTextTags = new Set([
+  "h1", "h2", "h3", "h4", "h5", "h6", "p", "span", "a", "button", "label", "li", "small", "strong", "em", "blockquote",
+]);
+
+function colorInputValue(value: string, fallback: string) {
+  if (/^#[0-9a-f]{6}$/i.test(value)) return value;
+  const rgb = value.match(/rgba?\(\s*(\d+)\D+(\d+)\D+(\d+)/i);
+  if (!rgb) return fallback;
+  return `#${[rgb[1], rgb[2], rgb[3]].map((part) => Number(part).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 type EngineTask = {
   id: string;
@@ -270,6 +326,8 @@ function Workspace() {
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [previewSelection, setPreviewSelection] = useState<PreviewSelection | null>(null);
   const [previewPickMode, setPreviewPickMode] = useState(false);
+  const [visualEditorOpen, setVisualEditorOpen] = useState(false);
+  const [visualEdit, setVisualEdit] = useState<VisualEditValues>(emptyVisualEdit);
   const [manualSnapshots, setManualSnapshots] = useState<ChatAttachment[]>([]);
   const [readingAttachments, setReadingAttachments] = useState(false);
   const [capturingSnapshot, setCapturingSnapshot] = useState(false);
@@ -288,6 +346,7 @@ function Workspace() {
   const listVersionsFn = useServerFn(listProjectFileVersions);
   const revertVersionFn = useServerFn(revertProjectFileVersion);
   const publishFn = useServerFn(publishProject);
+  const saveVisualFilesFn = useServerFn(saveVisualEditorFiles);
   const listCollaboratorsFn = useServerFn(listProjectCollaborators);
   const inviteCollaboratorFn = useServerFn(inviteProjectCollaborator);
   const removeCollaboratorFn = useServerFn(removeProjectCollaborator);
@@ -463,6 +522,97 @@ function Workspace() {
       setStreaming(null);
       toast.error(readableError(e));
     },
+  });
+
+  const saveVisualMutation = useMutation({
+    mutationFn: async () => {
+      if (!previewSelection || !files?.length) throw new Error("Selecione um elemento primeiro.");
+      const selector = previewSelection.selector;
+      const marker = encodeURIComponent(selector);
+      const cssValues: Record<string, string> = {
+        color: visualEdit.color,
+        "background-color": visualEdit.backgroundColor,
+        "font-size": visualEdit.fontSize,
+        "font-family": visualEdit.fontFamily,
+        "font-weight": visualEdit.fontWeight,
+        "text-align": visualEdit.textAlign,
+        width: visualEdit.width,
+        height: visualEdit.height,
+        padding: visualEdit.padding,
+        margin: visualEdit.margin,
+        "border-radius": visualEdit.borderRadius,
+        "border-width": visualEdit.borderWidth,
+        "border-style": visualEdit.borderWidth && visualEdit.borderWidth !== "0px" ? "solid" : "",
+        "border-color": visualEdit.borderColor,
+        opacity: visualEdit.opacity,
+      };
+      const declarations = Object.entries(cssValues)
+        .filter(([, value]) => value.trim())
+        .map(([property, value]) => `  ${property}: ${value} !important;`)
+        .join("\n");
+      const cssBlock = `/* forza-visual:${marker} */\n${selector} {\n${declarations}\n}\n/* /forza-visual:${marker} */`;
+      const cssPattern = new RegExp(
+        `/\\* forza-visual:${escapeRegExp(marker)} \\*/[\\s\\S]*?/\\* /forza-visual:${escapeRegExp(marker)} \\*/`,
+      );
+
+      const shouldEditText = visualTextTags.has(previewSelection.tag);
+      const runtimeBlock = `/* forza-visual:${marker} */\n(function(){var attempts=0;function apply(){var el=document.querySelector(${JSON.stringify(selector)});if(!el){if(attempts++<50)setTimeout(apply,100);return;}${shouldEditText ? `el.textContent=${JSON.stringify(visualEdit.text)};` : ""}${previewSelection.tag === "img" ? `el.setAttribute('src',${JSON.stringify(visualEdit.imageSrc)});` : ""}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',apply);else apply();})();\n/* /forza-visual:${marker} */`;
+      const runtimePattern = new RegExp(
+        `/\\* forza-visual:${escapeRegExp(marker)} \\*/[\\s\\S]*?/\\* /forza-visual:${escapeRegExp(marker)} \\*/`,
+      );
+      const replaceOrAppend = (content: string, pattern: RegExp, block: string) =>
+        pattern.test(content) ? content.replace(pattern, block) : `${content.trimEnd()}\n\n${block}\n`;
+
+      const htmlFile = files.find((file) => file.path === "index.html");
+      const cssFile = files.find((file) => file.path === "styles.css");
+      const jsFile = files.find((file) => file.path === "script.js");
+      const updates: Array<{ path: "index.html" | "styles.css" | "script.js"; content: string }> = [];
+
+      if (cssFile) {
+        updates.push({ path: "styles.css", content: replaceOrAppend(cssFile.content, cssPattern, cssBlock) });
+      }
+      if ((shouldEditText || previewSelection.tag === "img") && jsFile) {
+        updates.push({ path: "script.js", content: replaceOrAppend(jsFile.content, runtimePattern, runtimeBlock) });
+      }
+      if (htmlFile && !cssFile) {
+        let content = htmlFile.content;
+        const styleTag = `<style data-forza-visual="${marker}">\n${cssBlock}\n</style>`;
+        const stylePattern = new RegExp(`<style data-forza-visual="${escapeRegExp(marker)}">[\\s\\S]*?<\\/style>`);
+        content = stylePattern.test(content)
+          ? content.replace(stylePattern, styleTag)
+          : /<\/head>/i.test(content)
+            ? content.replace(/<\/head>/i, `${styleTag}\n</head>`)
+            : `${styleTag}\n${content}`;
+        if ((shouldEditText || previewSelection.tag === "img") && !jsFile) {
+          const scriptTag = `<script data-forza-visual="${marker}">\n${runtimeBlock}\n<\/script>`;
+          const scriptPattern = new RegExp(`<script data-forza-visual="${escapeRegExp(marker)}">[\\s\\S]*?<\\/script>`);
+          content = scriptPattern.test(content)
+            ? content.replace(scriptPattern, scriptTag)
+            : /<\/body>/i.test(content)
+              ? content.replace(/<\/body>/i, `${scriptTag}\n</body>`)
+              : `${content}\n${scriptTag}`;
+        }
+        updates.push({ path: "index.html", content });
+      } else if (htmlFile && (shouldEditText || previewSelection.tag === "img") && !jsFile) {
+        const scriptTag = `<script data-forza-visual="${marker}">\n${runtimeBlock}\n<\/script>`;
+        const scriptPattern = new RegExp(`<script data-forza-visual="${escapeRegExp(marker)}">[\\s\\S]*?<\\/script>`);
+        const content = scriptPattern.test(htmlFile.content)
+          ? htmlFile.content.replace(scriptPattern, scriptTag)
+          : /<\/body>/i.test(htmlFile.content)
+            ? htmlFile.content.replace(/<\/body>/i, `${scriptTag}\n</body>`)
+            : `${htmlFile.content}\n${scriptTag}`;
+        updates.push({ path: "index.html", content });
+      }
+
+      if (!updates.length) throw new Error("Não encontrei arquivos editáveis neste projeto.");
+      return saveVisualFilesFn({ data: { projectId, files: updates } });
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["files", projectId] });
+      setPreviewKey((key) => key + 1);
+      toast.success("Alterações visuais salvas no código do site.");
+    },
+    onError: (error: Error) => toast.error(readableError(error)),
   });
 
   const { data: activeJob } = useQuery({
@@ -661,16 +811,38 @@ function Workspace() {
       if (data?.type !== "forza-preview-element-selected" || !data.selection) return;
       setPreviewSelection(data.selection);
       setPreviewPickMode(false);
-      setInput((current) =>
-        current.trim()
-          ? current
-          : `Edite o elemento selecionado (${data.selection.selector}): `,
-      );
-      toast.success("Elemento selecionado no preview. Peça a alteração no chat.");
+      const styles = data.selection.styles ?? {};
+      setVisualEdit({
+        ...emptyVisualEdit,
+        text: data.selection.text ?? "",
+        imageSrc: data.selection.tag === "img" ? (data.selection.html?.match(/\bsrc=["']([^"']*)/i)?.[1] ?? "") : "",
+        color: styles.color || "#111111",
+        backgroundColor: styles.backgroundColor === "rgba(0, 0, 0, 0)" ? "#ffffff" : styles.backgroundColor || "#ffffff",
+        fontSize: styles.fontSize || "",
+        fontFamily: styles.fontFamily || "",
+        fontWeight: styles.fontWeight || "",
+        textAlign: styles.textAlign || "",
+        width: styles.width || "",
+        height: styles.height || "",
+        padding: styles.padding || "",
+        margin: styles.margin || "",
+        borderRadius: styles.borderRadius || "",
+        borderWidth: styles.borderWidth || "",
+        borderColor: styles.borderColor || "#000000",
+        opacity: styles.opacity || "1",
+      });
+      if (!visualEditorOpen) {
+        setInput((current) =>
+          current.trim() ? current : `Edite o elemento selecionado (${data.selection.selector}): `,
+        );
+        toast.success("Elemento selecionado no preview. Peça a alteração no chat.");
+      } else {
+        toast.success("Elemento carregado no editor visual.");
+      }
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, []);
+  }, [visualEditorOpen]);
 
   useEffect(() => {
     previewFrameRef.current?.contentWindow?.postMessage(
@@ -678,6 +850,36 @@ function Workspace() {
       "*",
     );
   }, [previewPickMode, previewKey]);
+
+  useEffect(() => {
+    if (!visualEditorOpen || !previewSelection) return;
+    previewFrameRef.current?.contentWindow?.postMessage(
+      {
+        type: "forza-visual-edit-preview",
+        selector: previewSelection.selector,
+        text: visualTextTags.has(previewSelection.tag) ? visualEdit.text : undefined,
+        imageSrc: previewSelection.tag === "img" ? visualEdit.imageSrc : undefined,
+        styles: {
+          color: visualEdit.color,
+          backgroundColor: visualEdit.backgroundColor,
+          fontSize: visualEdit.fontSize,
+          fontFamily: visualEdit.fontFamily,
+          fontWeight: visualEdit.fontWeight,
+          textAlign: visualEdit.textAlign,
+          width: visualEdit.width,
+          height: visualEdit.height,
+          padding: visualEdit.padding,
+          margin: visualEdit.margin,
+          borderRadius: visualEdit.borderRadius,
+          borderWidth: visualEdit.borderWidth,
+          borderStyle: visualEdit.borderWidth && visualEdit.borderWidth !== "0px" ? "solid" : "",
+          borderColor: visualEdit.borderColor,
+          opacity: visualEdit.opacity,
+        },
+      },
+      "*",
+    );
+  }, [previewSelection, visualEdit, visualEditorOpen]);
 
   useEffect(() => {
     try {
@@ -1091,9 +1293,23 @@ function Workspace() {
     outline.style.height = Math.max(1, r.height) + 'px';
   }
   window.addEventListener('message', function(event){
-    if (!event.data || event.data.type !== 'forza-preview-pick-mode') return;
-    pickMode = !!event.data.enabled;
-    document.documentElement.style.cursor = pickMode ? 'crosshair' : '';
+    if (!event.data) return;
+    if (event.data.type === 'forza-preview-pick-mode') {
+      pickMode = !!event.data.enabled;
+      document.documentElement.style.cursor = pickMode ? 'crosshair' : '';
+      return;
+    }
+    if (event.data.type === 'forza-visual-edit-preview') {
+      var edited = document.querySelector(event.data.selector || '');
+      if (!edited) return;
+      var styleValues = event.data.styles || {};
+      Object.keys(styleValues).forEach(function(key){
+        if (styleValues[key] !== undefined && styleValues[key] !== '') edited.style[key] = styleValues[key];
+      });
+      if (event.data.text !== undefined) edited.textContent = event.data.text;
+      if (event.data.imageSrc !== undefined && edited.tagName === 'IMG') edited.setAttribute('src', event.data.imageSrc);
+      drawOutline(edited);
+    }
   });
   document.addEventListener('click', function(event) {
     var target = event.target && event.target.closest ? event.target.closest('body *') : event.target;
@@ -1103,13 +1319,30 @@ function Workspace() {
       drawOutline(target);
       pickMode = false;
       document.documentElement.style.cursor = '';
+      var computed = window.getComputedStyle(target);
       window.parent.postMessage({ type: 'forza-preview-element-selected', selection: {
         tag: target.tagName.toLowerCase(),
         id: target.id || undefined,
         classes: target.className && typeof target.className === 'string' ? target.className : undefined,
         text: (target.innerText || target.textContent || '').replace(/\s+/g,' ').trim().slice(0, 600),
         selector: selectorFor(target),
-        html: (target.outerHTML || '').slice(0, 2000)
+        html: (target.outerHTML || '').slice(0, 2000),
+        styles: {
+          color: computed.color,
+          backgroundColor: computed.backgroundColor,
+          fontSize: computed.fontSize,
+          fontFamily: computed.fontFamily,
+          fontWeight: computed.fontWeight,
+          textAlign: computed.textAlign,
+          width: computed.width,
+          height: computed.height,
+          padding: computed.padding,
+          margin: computed.margin,
+          borderRadius: computed.borderRadius,
+          borderWidth: computed.borderWidth,
+          borderColor: computed.borderColor,
+          opacity: computed.opacity
+        }
       }}, '*');
       return;
     }
@@ -1173,6 +1406,9 @@ function Workspace() {
   const publicUrl = project?.slug
     ? `${typeof window !== "undefined" ? window.location.origin : ""}/s/${project.slug}`
     : null;
+  const selectedIsText = !!previewSelection && visualTextTags.has(previewSelection.tag);
+  const selectedIsImage = previewSelection?.tag === "img";
+  const selectedIsDivider = previewSelection?.tag === "hr";
 
   const openPreviewInNewTab = () => {
     if (!hasFiles) return toast.error("Gere o site antes de abrir em nova aba.");
@@ -1663,6 +1899,21 @@ function Workspace() {
                 </Button>
                 <Button
                   size="sm"
+                  variant={visualEditorOpen ? "default" : "outline"}
+                  onClick={() => {
+                    const opening = !visualEditorOpen;
+                    setVisualEditorOpen(opening);
+                    setPreviewPickMode(opening);
+                    if (opening) toast.info("Clique em qualquer elemento do site para editá-lo visualmente.");
+                  }}
+                  disabled={!hasFiles}
+                  title="Editar o site visualmente"
+                >
+                  <SlidersHorizontal className="size-3.5" />
+                  <span className="hidden sm:inline">Editor visual</span>
+                </Button>
+                <Button
+                  size="sm"
                   variant={previewPickMode ? "default" : "outline"}
                   onClick={() => setPreviewPickMode((enabled) => !enabled)}
                   disabled={!hasFiles}
@@ -1841,6 +2092,122 @@ function Workspace() {
           </Tabs>
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      {visualEditorOpen && (
+        <aside className="fixed z-[80] right-2 sm:right-4 top-16 bottom-2 w-[calc(100vw-1rem)] sm:w-[360px] rounded-2xl border border-border bg-card/95 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 font-display font-semibold">
+                <SlidersHorizontal className="size-4 text-primary" /> Editor visual
+              </div>
+              <div className="text-[11px] text-muted-foreground truncate">
+                {previewSelection?.selector ?? "Selecione um elemento no site"}
+              </div>
+            </div>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-8 shrink-0"
+              onClick={() => {
+                setVisualEditorOpen(false);
+                setPreviewPickMode(false);
+                setPreviewSelection(null);
+                setPreviewKey((key) => key + 1);
+              }}
+              title="Fechar sem salvar"
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+
+          {!previewSelection ? (
+            <div className="flex-1 grid place-items-center p-6 text-center">
+              <div>
+                <MousePointer2 className="size-9 text-primary mx-auto" />
+                <p className="mt-3 font-medium">Clique em um elemento do preview</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  O painel muda automaticamente para texto, imagem, card, seção, botão ou divisória.
+                </p>
+                <Button className="mt-4" size="sm" onClick={() => setPreviewPickMode(true)}>
+                  <MousePointer2 className="size-3.5" /> Selecionar elemento
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex-1 overflow-y-auto p-4 space-y-5">
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs">
+                  <span className="font-semibold uppercase text-primary">{previewSelection.tag}</span>
+                  {previewSelection.text && <p className="mt-1 line-clamp-2 text-muted-foreground">{previewSelection.text}</p>}
+                </div>
+
+                {selectedIsText && (
+                  <section className="space-y-3">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Conteúdo e texto</h3>
+                    <label className="block text-xs">
+                      Texto
+                      <Textarea
+                        className="mt-1 min-h-20"
+                        value={visualEdit.text}
+                        onChange={(event) => setVisualEdit((value) => ({ ...value, text: event.target.value }))}
+                      />
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-xs">Tamanho<Input className="mt-1" value={visualEdit.fontSize} placeholder="16px" onChange={(e) => setVisualEdit((v) => ({ ...v, fontSize: e.target.value }))} /></label>
+                      <label className="text-xs">Peso<select className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2" value={visualEdit.fontWeight} onChange={(e) => setVisualEdit((v) => ({ ...v, fontWeight: e.target.value }))}><option value="">Atual</option><option value="300">Leve</option><option value="400">Normal</option><option value="600">Semibold</option><option value="700">Negrito</option><option value="900">Extra bold</option></select></label>
+                      <label className="text-xs">Fonte<Input className="mt-1" value={visualEdit.fontFamily} placeholder="Inter, sans-serif" onChange={(e) => setVisualEdit((v) => ({ ...v, fontFamily: e.target.value }))} /></label>
+                      <label className="text-xs">Alinhamento<select className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2" value={visualEdit.textAlign} onChange={(e) => setVisualEdit((v) => ({ ...v, textAlign: e.target.value }))}><option value="">Atual</option><option value="left">Esquerda</option><option value="center">Centro</option><option value="right">Direita</option><option value="justify">Justificado</option></select></label>
+                    </div>
+                  </section>
+                )}
+
+                {selectedIsImage && (
+                  <section className="space-y-3">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Imagem</h3>
+                    <label className="block text-xs">URL da imagem<Input className="mt-1" value={visualEdit.imageSrc} onChange={(e) => setVisualEdit((v) => ({ ...v, imageSrc: e.target.value }))} /></label>
+                    <label className="block text-xs">Substituir por arquivo<Input className="mt-1" type="file" accept="image/*" onChange={async (e) => { const file = e.target.files?.[0]; if (file) { const imageSrc = await fileToDataUrl(file); setVisualEdit((v) => ({ ...v, imageSrc })); } }} /></label>
+                  </section>
+                )}
+
+                <section className="space-y-3">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cores</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs">Texto<div className="mt-1 flex gap-1"><input className="h-9 w-10 rounded border border-border bg-transparent" type="color" value={colorInputValue(visualEdit.color, "#111111")} onChange={(e) => setVisualEdit((v) => ({ ...v, color: e.target.value }))} /><Input value={visualEdit.color} onChange={(e) => setVisualEdit((v) => ({ ...v, color: e.target.value }))} /></div></label>
+                    <label className="text-xs">Fundo<div className="mt-1 flex gap-1"><input className="h-9 w-10 rounded border border-border bg-transparent" type="color" value={colorInputValue(visualEdit.backgroundColor, "#ffffff")} onChange={(e) => setVisualEdit((v) => ({ ...v, backgroundColor: e.target.value }))} /><Input value={visualEdit.backgroundColor} onChange={(e) => setVisualEdit((v) => ({ ...v, backgroundColor: e.target.value }))} /></div></label>
+                    <label className="text-xs">Borda<div className="mt-1 flex gap-1"><input className="h-9 w-10 rounded border border-border bg-transparent" type="color" value={colorInputValue(visualEdit.borderColor, "#000000")} onChange={(e) => setVisualEdit((v) => ({ ...v, borderColor: e.target.value }))} /><Input value={visualEdit.borderColor} onChange={(e) => setVisualEdit((v) => ({ ...v, borderColor: e.target.value }))} /></div></label>
+                    <label className="text-xs">Opacidade<Input className="mt-1" type="number" min="0" max="1" step="0.05" value={visualEdit.opacity} onChange={(e) => setVisualEdit((v) => ({ ...v, opacity: e.target.value }))} /></label>
+                  </div>
+                </section>
+
+                <section className="space-y-3">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Tamanho e espaço</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs">Largura<Input className="mt-1" value={visualEdit.width} placeholder="auto / 300px / 100%" onChange={(e) => setVisualEdit((v) => ({ ...v, width: e.target.value }))} /></label>
+                    <label className="text-xs">Altura<Input className="mt-1" value={visualEdit.height} placeholder="auto / 200px" onChange={(e) => setVisualEdit((v) => ({ ...v, height: e.target.value }))} /></label>
+                    <label className="text-xs">Espaço interno<Input className="mt-1" value={visualEdit.padding} placeholder="16px" onChange={(e) => setVisualEdit((v) => ({ ...v, padding: e.target.value }))} /></label>
+                    <label className="text-xs">Espaço externo<Input className="mt-1" value={visualEdit.margin} placeholder="0 / 16px auto" onChange={(e) => setVisualEdit((v) => ({ ...v, margin: e.target.value }))} /></label>
+                    <label className="text-xs">Raio da borda<Input className="mt-1" value={visualEdit.borderRadius} placeholder="12px" onChange={(e) => setVisualEdit((v) => ({ ...v, borderRadius: e.target.value }))} /></label>
+                    <label className="text-xs">Espessura da borda<Input className="mt-1" value={visualEdit.borderWidth} placeholder={selectedIsDivider ? "2px" : "1px"} onChange={(e) => setVisualEdit((v) => ({ ...v, borderWidth: e.target.value }))} /></label>
+                  </div>
+                </section>
+              </div>
+
+              <div className="border-t border-border p-3 flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={() => setPreviewPickMode(true)}>
+                  <MousePointer2 className="size-3.5" /> Outro elemento
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => { setPreviewKey((key) => key + 1); setPreviewSelection(null); }}>
+                  Cancelar
+                </Button>
+                <Button size="sm" className="ml-auto" onClick={() => saveVisualMutation.mutate()} disabled={saveVisualMutation.isPending}>
+                  {saveVisualMutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+                  Salvar
+                </Button>
+              </div>
+            </>
+          )}
+        </aside>
+      )}
 
       <Dialog open={modelOpen} onOpenChange={setModelOpen}>
         <DialogContent>
