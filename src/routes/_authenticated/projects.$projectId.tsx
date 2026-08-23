@@ -248,6 +248,7 @@ const modelOptions: Array<{
 function Workspace() {
   const { projectId } = Route.useParams();
   const activeJobStorageKey = `active-generation-job:${projectId}`;
+  const wizardStorageKey = `project-wizard:${projectId}`;
   // Editor mobile: painéis empilham verticalmente (chat em cima, site embaixo)
   const isMobile = useIsMobile();
   const [input, setInput] = useState("");
@@ -303,6 +304,31 @@ function Workspace() {
       setStreaming({ status: "Retomando geração em background…", chars: 0 });
     }
   }, [activeJobStorageKey]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(wizardStorageKey);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as {
+        initialPrompt?: string;
+        wizardPrompt?: string;
+        questions?: WizardQuestion[];
+        step?: number;
+        answers?: Record<string, string>;
+        customAnswers?: Record<string, string>;
+      };
+      if (!Array.isArray(saved.questions) || saved.questions.length === 0) return;
+      setInitialPrompt(saved.initialPrompt ?? saved.wizardPrompt ?? "");
+      setWizardPrompt(saved.wizardPrompt ?? saved.initialPrompt ?? "");
+      setWizardQuestions(saved.questions);
+      setWizardStep(Math.min(Math.max(saved.step ?? 0, 0), saved.questions.length - 1));
+      setWizardAnswers(saved.answers ?? {});
+      setWizardCustomAnswers(saved.customAnswers ?? {});
+      toast.info("Plan retomado de onde você parou.");
+    } catch {
+      localStorage.removeItem(wizardStorageKey);
+    }
+  }, [wizardStorageKey]);
 
   const { data: project } = useQuery({
     queryKey: ["project", projectId],
@@ -682,6 +708,32 @@ function Workspace() {
     } catch {}
   }, [manualSnapshots, projectId]);
 
+  useEffect(() => {
+    if (wizardQuestions.length === 0) return;
+    try {
+      localStorage.setItem(
+        wizardStorageKey,
+        JSON.stringify({
+          initialPrompt,
+          wizardPrompt,
+          questions: wizardQuestions,
+          step: wizardStep,
+          answers: wizardAnswers,
+          customAnswers: wizardCustomAnswers,
+          updatedAt: Date.now(),
+        }),
+      );
+    } catch {}
+  }, [
+    initialPrompt,
+    wizardAnswers,
+    wizardCustomAnswers,
+    wizardPrompt,
+    wizardQuestions,
+    wizardStep,
+    wizardStorageKey,
+  ]);
+
   const updateSelectedModel = (modelId: ForzaModelId) => {
     const option = modelOptions.find((model) => model.id === modelId);
     if (option?.requiresSubscription && !hasSubscription) {
@@ -938,6 +990,9 @@ function Workspace() {
     setWizardStep(0);
     setWizardAnswers({});
     setWizardCustomAnswers({});
+    try {
+      localStorage.removeItem(wizardStorageKey);
+    } catch {}
   };
 
   const currentWizardQuestion = wizardQuestions[wizardStep];
