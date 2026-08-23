@@ -61,6 +61,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { notifyGenerationComplete, playInterfaceSound } from "@/lib/client-feedback";
+import { getStripeEnvironment } from "@/lib/stripe";
 import Editor from "@monaco-editor/react";
 
 export const Route = createFileRoute("/_authenticated/projects/$projectId")({
@@ -325,7 +326,10 @@ function Workspace() {
       const { data: authData } = await supabase.auth.getUser();
       const userId = authData.user?.id;
       if (!userId) return false;
-      const { data, error } = await supabase.rpc("has_active_subscription", { _user_id: userId });
+      const { data, error } = await supabase.rpc("has_active_subscription", {
+        _user_id: userId,
+        _env: getStripeEnvironment(),
+      });
       if (error) return false;
       return !!data;
     },

@@ -707,7 +707,12 @@ async function processImageTags(html: string, projectId: string, apiKey: string)
 }
 
 async function hasActiveSubscription(supabase: any, userId: string) {
-  const { data, error } = await supabase.rpc("has_active_subscription", { _user_id: userId });
+  // Passe _env explicitamente: bancos antigos podem manter overload
+  // has_active_subscription(uuid), que não conhece o bypass de admin.
+  const { data, error } = await supabase.rpc("has_active_subscription", {
+    _user_id: userId,
+    _env: "sandbox",
+  });
   if (!error) return !!data;
 
   const fallback = await supabase.rpc("has_active_subscription");

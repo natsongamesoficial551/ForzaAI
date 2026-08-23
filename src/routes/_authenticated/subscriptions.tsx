@@ -71,7 +71,10 @@ function Subscriptions() {
     queryKey: ["user-plan", user?.id],
     enabled: !!user?.id,
     queryFn: async () => {
-      const { data, error } = await supabase.rpc("get_user_plan", { _user_id: user!.id });
+      const { data, error } = await supabase.rpc("get_user_plan", {
+        _user_id: user!.id,
+        _env: getStripeEnvironment(),
+      });
       if (error) return null;
       return data as "free" | "pro" | "business";
     },
