@@ -67,8 +67,22 @@ function Subscriptions() {
     },
   });
 
+  const { data: planFromRpc } = useQuery({
+    queryKey: ["user-plan", user?.id],
+    enabled: !!user?.id,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_user_plan", { _user_id: user!.id });
+      if (error) return null;
+      return data as "free" | "pro" | "business";
+    },
+  });
+
   const currentPlanId =
-    subscription?.price_id === "business_monthly"
+    planFromRpc === "business"
+      ? "business"
+      : planFromRpc === "pro"
+        ? "pro"
+        : subscription?.price_id === "business_monthly"
       ? "business"
       : subscription?.price_id === "pro_monthly"
         ? "pro"
@@ -98,7 +112,7 @@ function Subscriptions() {
               Cancele quando quiser. O acesso continua ativo até o final do período pago.
             </p>
           </div>
-          {currentPlanId !== "free" && (
+          {subscription && currentPlanId !== "free" && (
             <Button variant="outline" onClick={() => portalMutation.mutate()} disabled={portalMutation.isPending}>
               {portalMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <ExternalLink className="size-4" />}
               Gerenciar ou cancelar

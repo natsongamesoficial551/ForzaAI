@@ -322,7 +322,10 @@ function Workspace() {
     queryKey: ["has-active-subscription"],
     retry: false,
     queryFn: async () => {
-      const { data, error } = await supabase.rpc("has_active_subscription");
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData.user?.id;
+      if (!userId) return false;
+      const { data, error } = await supabase.rpc("has_active_subscription", { _user_id: userId });
       if (error) return false;
       return !!data;
     },
