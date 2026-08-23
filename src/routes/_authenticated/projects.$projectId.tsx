@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import JSZip from "jszip";
 import html2canvas from "html2canvas";
@@ -57,6 +57,7 @@ import {
   Lock,
   Camera,
   Trash2,
+  MousePointer2,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { notifyGenerationComplete, playInterfaceSound } from "@/lib/client-feedback";
@@ -80,6 +81,15 @@ type ChatAttachment = {
   size: number;
   kind: "image" | "zip" | "text" | "file";
   content: string;
+};
+
+type PreviewSelection = {
+  tag: string;
+  id?: string;
+  classes?: string;
+  text?: string;
+  selector: string;
+  html?: string;
 };
 
 type EngineTask = {
@@ -255,6 +265,8 @@ function Workspace() {
   const [wizardAnswers, setWizardAnswers] = useState<Record<string, string>>({});
   const [wizardCustomAnswers, setWizardCustomAnswers] = useState<Record<string, string>>({});
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [previewSelection, setPreviewSelection] = useState<PreviewSelection | null>(null);
+  const [previewPickMode, setPreviewPickMode] = useState(false);
   const [manualSnapshots, setManualSnapshots] = useState<ChatAttachment[]>([]);
   const [readingAttachments, setReadingAttachments] = useState(false);
   const [capturingSnapshot, setCapturingSnapshot] = useState(false);
@@ -591,6 +603,31 @@ function Workspace() {
   }, [messages, streaming, wizardQuestions, initialPrompt]);
 
   useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== previewFrameRef.current?.contentWindow) return;
+      const data = event.data as { type?: string; selection?: PreviewSelection };
+      if (data?.type !== "forza-preview-element-selected" || !data.selection) return;
+      setPreviewSelection(data.selection);
+      setPreviewPickMode(false);
+      setInput((current) =>
+        current.trim()
+          ? current
+          : `Edite o elemento selecionado (${data.selection.selector}): `,
+      );
+      toast.success("Elemento selecionado no preview. Peça a alteração no chat.");
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
+  useEffect(() => {
+    previewFrameRef.current?.contentWindow?.postMessage(
+      { type: "forza-preview-pick-mode", enabled: previewPickMode },
+      "*",
+    );
+  }, [previewPickMode, previewKey]);
+
+  useEffect(() => {
     try {
       const saved = localStorage.getItem(`project-model:${projectId}`) as ForzaModelId | null;
       if (saved && modelOptions.some((model) => model.id === saved)) setSelectedModel(saved);
@@ -655,6 +692,10 @@ function Workspace() {
     (wizardQuestions.length > 0 || !!initialPrompt || !messages || messages.length === 0);
   const mode = isPlanning ? "plan" : "build";
 
+  const selectedElementContext = previewSelection
+    ? `\n\nELEMENTO SELECIONADO NO PREVIEW (edição cirúrgica):\nSelector CSS: ${previewSelection.selector}\nTag: ${previewSelection.tag}${previewSelection.id ? `\nID: ${previewSelection.id}` : ""}${previewSelection.classes ? `\nClasses: ${previewSelection.classes}` : ""}${previewSelection.text ? `\nTexto visível: ${previewSelection.text}` : ""}${previewSelection.html ? `\nHTML aproximado do elemento:\n${previewSelection.html}` : ""}\n\nRegra: modifique somente esse elemento/área e o CSS/JS diretamente necessário. Preserve o restante do site.`
+    : "";
+
   const handleSend = () => {
     const text = input.trim();
     if (
@@ -678,9 +719,10 @@ function Workspace() {
     }
     if (messageAttachments.length === 0) {
       startBuildJob(
-        `Pedido de ajuste do usuário:\n${text}\n\nModo Build: atualize os arquivos existentes mantendo o site funcional e aplicando exatamente o ajuste pedido. Se o pedido mencionar claro/escuro, tema, toggle ou modo noturno, implemente CSS dos dois temas e JavaScript real para alternar e persistir a preferência.`,
+        `Pedido de ajuste do usuário:\n${text}${selectedElementContext}\n\nModo Build: atualize os arquivos existentes mantendo o site funcional e aplicando exatamente o ajuste pedido. Se houver elemento selecionado, edite só aquela parte. Se o pedido mencionar claro/escuro, tema, toggle ou modo noturno, implemente CSS dos dois temas e JavaScript real para alternar e persistir a preferência.`,
         true,
       );
+      setPreviewSelection(null);
       return;
     }
     // Anexos vão para o job background: o fluxo síncrono embute base64 no
@@ -698,9 +740,10 @@ function Workspace() {
       .join("\n\n")
       .slice(0, 60_000); // truncamento defensivo: 12 anexos x 20k passaria do limite prático da coluna message
     startBuildJob(
-      `Pedido de ajuste do usuário:\n${text || "Analise os anexos e prints enviados e corrija o site."}\n\n${attachmentContext}\n\nModo Build: atualize os arquivos existentes mantendo o site funcional e aplicando exatamente o ajuste pedido.`,
+      `Pedido de ajuste do usuário:\n${text || "Analise os anexos e prints enviados e corrija o site."}${selectedElementContext}\n\n${attachmentContext}\n\nModo Build: atualize os arquivos existentes mantendo o site funcional e aplicando exatamente o ajuste pedido. Se houver elemento selecionado, edite só aquela parte.`,
       true,
     );
+    setPreviewSelection(null);
   };
 
   const readAttachment = async (file: File): Promise<ChatAttachment> => {
@@ -763,8 +806,8 @@ function Workspace() {
     };
   };
 
-  const handleAttachmentChange = async (filesList: FileList | null) => {
-    const selected = Array.from(filesList ?? []).slice(0, 12 - attachments.length);
+  const appendAttachmentFiles = async (filesToAdd: File[]) => {
+    const selected = filesToAdd.slice(0, 12 - attachments.length);
     if (selected.length === 0) return;
     const oversized = selected.find((file) => file.size > 8_000_000);
     if (oversized) {
@@ -780,6 +823,27 @@ function Workspace() {
     } finally {
       setReadingAttachments(false);
     }
+  };
+
+  const handleAttachmentChange = async (filesList: FileList | null) => {
+    await appendAttachmentFiles(Array.from(filesList ?? []));
+  };
+
+  const handleChatPaste = async (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedFiles = Array.from(event.clipboardData?.files ?? []);
+    const images = pastedFiles.filter((file) => file.type.startsWith("image/"));
+    if (images.length === 0) return;
+    event.preventDefault();
+    await appendAttachmentFiles(
+      images.map((file, index) =>
+        file.name
+          ? file
+          : new File([file], `screenshot-colado-${Date.now()}-${index + 1}.png`, {
+              type: file.type || "image/png",
+            }),
+      ),
+    );
+    toast.success(`${images.length} imagem(ns) colada(s) no chat.`);
   };
 
   const capturePreviewSnapshot = async () => {
@@ -907,19 +971,80 @@ function Workspace() {
   const previewDoc = useMemo(() => {
     const hasDoc = /<!doctype html>/i.test(html) || /<html[\s>]/i.test(html);
     const previewGuard = `<script>
-document.addEventListener('click', function(event) {
-  const link = event.target.closest('a[href]');
-  if (!link) return;
-  const href = link.getAttribute('href') || '';
-  if (href.startsWith('#')) {
-    event.preventDefault();
-    document.querySelector(href)?.scrollIntoView({ behavior: 'smooth' });
-    return;
+(function(){
+  var pickMode = false;
+  var outline = null;
+  function cssEscape(value){
+    if (window.CSS && CSS.escape) return CSS.escape(value);
+    return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '\\$&');
   }
-  if (!href.startsWith('http://') && !href.startsWith('https://') && !href.startsWith('mailto:') && !href.startsWith('tel:')) {
-    event.preventDefault();
+  function selectorFor(el){
+    if (!el || !el.tagName) return 'body';
+    if (el.id) return '#' + cssEscape(el.id);
+    var parts = [];
+    var node = el;
+    while (node && node.nodeType === 1 && node !== document.body && parts.length < 5) {
+      var part = node.tagName.toLowerCase();
+      if (node.classList && node.classList.length) part += '.' + Array.from(node.classList).slice(0,3).map(cssEscape).join('.');
+      var parent = node.parentElement;
+      if (parent) {
+        var same = Array.from(parent.children).filter(function(child){ return child.tagName === node.tagName; });
+        if (same.length > 1) part += ':nth-of-type(' + (same.indexOf(node) + 1) + ')';
+      }
+      parts.unshift(part);
+      node = parent;
+    }
+    return parts.join(' > ') || el.tagName.toLowerCase();
   }
-});
+  function drawOutline(el){
+    if (!outline) {
+      outline = document.createElement('div');
+      outline.setAttribute('data-forza-selection-outline','true');
+      outline.style.cssText = 'position:absolute;z-index:2147483647;pointer-events:none;border:2px solid #8b5cf6;box-shadow:0 0 0 99999px rgba(139,92,246,.08),0 0 24px rgba(139,92,246,.55);border-radius:8px;transition:all .12s ease;';
+      document.body.appendChild(outline);
+    }
+    var r = el.getBoundingClientRect();
+    outline.style.left = (r.left + window.scrollX) + 'px';
+    outline.style.top = (r.top + window.scrollY) + 'px';
+    outline.style.width = Math.max(1, r.width) + 'px';
+    outline.style.height = Math.max(1, r.height) + 'px';
+  }
+  window.addEventListener('message', function(event){
+    if (!event.data || event.data.type !== 'forza-preview-pick-mode') return;
+    pickMode = !!event.data.enabled;
+    document.documentElement.style.cursor = pickMode ? 'crosshair' : '';
+  });
+  document.addEventListener('click', function(event) {
+    var target = event.target && event.target.closest ? event.target.closest('body *') : event.target;
+    if (pickMode && target && !target.closest('[data-forza-selection-outline]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      drawOutline(target);
+      pickMode = false;
+      document.documentElement.style.cursor = '';
+      window.parent.postMessage({ type: 'forza-preview-element-selected', selection: {
+        tag: target.tagName.toLowerCase(),
+        id: target.id || undefined,
+        classes: target.className && typeof target.className === 'string' ? target.className : undefined,
+        text: (target.innerText || target.textContent || '').replace(/\s+/g,' ').trim().slice(0, 600),
+        selector: selectorFor(target),
+        html: (target.outerHTML || '').slice(0, 2000)
+      }}, '*');
+      return;
+    }
+    var link = event.target.closest && event.target.closest('a[href]');
+    if (!link) return;
+    var href = link.getAttribute('href') || '';
+    if (href.startsWith('#')) {
+      event.preventDefault();
+      document.querySelector(href)?.scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+    if (!href.startsWith('http://') && !href.startsWith('https://') && !href.startsWith('mailto:') && !href.startsWith('tel:')) {
+      event.preventDefault();
+    }
+  }, true);
+})();
 <\/script>`;
     if (hasDoc) {
       let doc = html;
@@ -1229,6 +1354,33 @@ document.addEventListener('click', function(event) {
               </div>
             )}
             <div className="p-3 border-t border-border">
+              {previewSelection && (
+                <div className="mb-2 rounded-xl border border-primary/30 bg-primary/10 p-2 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1 font-medium text-primary">
+                        <MousePointer2 className="size-3.5" /> Elemento selecionado
+                      </div>
+                      <div className="mt-1 font-mono text-[11px] text-foreground truncate">
+                        {previewSelection.selector}
+                      </div>
+                      {previewSelection.text && (
+                        <div className="mt-1 line-clamp-2 text-muted-foreground">
+                          “{previewSelection.text}”
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewSelection(null)}
+                      className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-background hover:text-destructive"
+                      title="Limpar seleção"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
               {attachments.length > 0 && (
                 <div className="mb-2 flex flex-wrap gap-2">
                   {attachments.map((attachment, index) => (
@@ -1283,6 +1435,7 @@ document.addEventListener('click', function(event) {
                 <Textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
+                  onPaste={handleChatPaste}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
@@ -1403,6 +1556,16 @@ document.addEventListener('click', function(event) {
                   title="Recarregar"
                 >
                   <RefreshCw className="size-3.5" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant={previewPickMode ? "default" : "outline"}
+                  onClick={() => setPreviewPickMode((enabled) => !enabled)}
+                  disabled={!hasFiles}
+                  title="Selecionar elemento no preview para editar pelo chat"
+                >
+                  <MousePointer2 className="size-3.5" />
+                  <span className="hidden sm:inline">Selecionar</span>
                 </Button>
                 <Button
                   size="sm"

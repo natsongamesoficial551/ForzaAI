@@ -50,7 +50,7 @@ function getEnrichedContract(baseContract) {
 const RESPONSIVE_RULES =
   "Responsivo mobile-first: <meta viewport> no HTML; @media (max-width) 768px e 480px colapsando grids para 1 coluna; tipografia clamp(); sem scroll horizontal; botões ≥44px; menu hamburguer <768px; nunca 100vh puro (use min-height). Seja CONCISO: cada regra CSS deve ter propósito — prefira qualidade a quantidade.";
 
-export const ENGINE_VERSION = "2.6.1-cloudflare-gateway";
+export const ENGINE_VERSION = "2.7.0-surgical-edits";
 
 // 10 min por tentativa: chamadas por arquivo levam 1-3 min em modelos free,
 // mas provedores/gateways (9router) podem ficar bem mais lentos em pico.
@@ -824,6 +824,26 @@ function detectOutputFormat(message) {
   if (/\b(react|jsx|tsx|next\.?js|createelement)\b/.test(t)) return "react";
   if (/\b(vue|angular|svelte|solid\.?js?)\b/.test(t)) return "react";
   return "three-files";
+}
+
+function detectCurrentFilesFormat(currentFiles) {
+  const files = Array.isArray(currentFiles) ? currentFiles : [];
+  const paths = new Set(files.map((file) => file.path));
+  const html = files.find((file) => file.path === "index.html")?.content || "";
+  const js = files.find((file) => file.path === "script.js")?.content || "";
+  if (files.length === 1 && paths.has("index.html")) return "single-html";
+  if (/type=["']text\/babel|react(?:\.production)?\.min\.js|ReactDOM\.|createRoot\(|<App\b|const\s*\{[^}]*useState/i.test(`${html}\n${js}`)) return "react";
+  return "three-files";
+}
+
+function editModeRules(outputFormat) {
+  const formatRule =
+    outputFormat === "single-html"
+      ? "FORMATO ATUAL: single-html. Retorne/salve somente index.html self-contained; NÃO crie styles.css/script.js."
+      : outputFormat === "react"
+        ? "FORMATO ATUAL: react. Preserve index.html shell + styles.css + script.js JSX/Babel; NÃO converta para HTML simples."
+        : "FORMATO ATUAL: three-files. Preserve index.html + styles.css + script.js; NÃO converta para HTML único.";
+  return `${formatRule}\nMODO EDIÇÃO CIRÚRGICA: use os arquivos atuais como fonte da verdade. Não refaça o site, não troque identidade visual, não mude arquitetura/bibliotecas e não reordene tudo. Altere somente o que o usuário pediu (ou o elemento selecionado no preview) e o CSS/JS estritamente necessário.`;
 }
 
 async function fetchAiText(modelOrModels, body, context = {}) {
@@ -1648,6 +1668,12 @@ async function runEngine(supabase, job, model, project, currentFiles, skillsCont
     const typeRequirements = projectTypeRequirements(project, job);
     const direction = pickDesignDirection(project);
     const designBrief = `DIREÇÃO VISUAL OBRIGATÓRIA (${direction.name}): ${direction.brief}\nEssa direção foi escolhida especificamente para este projeto; não use um layout genérico de template.`;
+    // Em edição, o formato dos arquivos existentes manda. A mensagem do usuário
+    // pode dizer "mude esse botão" e não pode fazer o motor converter HTML único
+    // em 3 arquivos ou React em HTML simples.
+    const outputFormat = currentFiles?.length
+      ? detectCurrentFilesFormat(currentFiles)
+      : detectOutputFormat(`${job.message ?? ""}\n${project.description ?? ""}`);
 
     const requestContext = `Projeto: ${project.name}
 Tipo: ${project.site_type}
@@ -1655,11 +1681,11 @@ Descrição: ${project.description ?? "—"}
 Pedido: ${job.message}
 Tipo inferido: ${typeRequirements.type}
 Seções obrigatórias: ${typeRequirements.required_sections.join(", ")}
+${currentFiles?.length ? `${editModeRules(outputFormat)}\n` : ""}
 ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}`;
 
     // Geração arquivo por arquivo: 3 chamadas menores em vez de 1 gigante.
     // Formato de saída conforme o pedido (default: 3 arquivos).
-    const outputFormat = detectOutputFormat(`${job.message ?? ""}\n${project.description ?? ""}`);
     const antiTruncate =
       "Entregue o arquivo COMPLETO e fechado — nunca corte no meio (chaves/parênteses fechados, </html> no fim). Se estiver longo, SIMPLIFIQUE o conteúdo interno em vez de truncar. CONCISÃO: sem comentários explicativos, sem código morto, sem repetição de padrões.";
     const maxTokens = 8_000;
@@ -1709,6 +1735,14 @@ ${currentFiles?.length ? `Arquivos atuais:\n${filesContext(currentFiles)}` : ""}
           system: `Você é o desenvolvedor JS sênior do ForzaAI. Recebe a estrutura do HTML já gerado e produz APENAS o conteúdo do script.js completo (sem markdown, sem explicação, sem comentários). Regras: JS puro enxuto, sem eval, sem segredos. Implemente o essencial para TODO elemento interativo: menu mobile, navegação âncora suave com offset, FAQ accordion/tabs, formulário com validação + feedback simulado, carrinho com localStorage quando existir, reveals on-scroll via IntersectionObserver. defer-safe (DOMContentLoaded). Compatível com as classes/ids da estrutura fornecida. Funções pequenas e diretas. ${antiTruncate}`,
         },
       ];
+    }
+
+    if (currentFiles?.length) {
+      const surgicalEdit = `${editModeRules(outputFormat)}\nIMPORTANTE: isto NÃO é geração nova. Preserve o site existente e aplique somente a alteração pedida. Ignore exigências de quantidade mínima de seções/cards/regras se elas conflitarem com a preservação do site atual. Retorne o(s) arquivo(s) completo(s) no mesmo formato apenas porque o banco salva arquivos completos, mas com diff mínimo.`;
+      stages = stages.map((stage) => ({
+        ...stage,
+        system: `${stage.system}\n\n${surgicalEdit}`,
+      }));
     }
 
     let html = "";

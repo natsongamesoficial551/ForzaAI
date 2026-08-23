@@ -96,6 +96,28 @@ type GeneratedFile = {
   content: string;
 };
 
+type OutputFormat = "single-html" | "three-files" | "react";
+
+function detectCurrentOutputFormat(files: GeneratedFile[] | undefined): OutputFormat {
+  const list = files ?? [];
+  const paths = new Set(list.map((file) => file.path));
+  const html = list.find((file) => file.path === "index.html")?.content ?? "";
+  const js = list.find((file) => file.path === "script.js")?.content ?? "";
+  if (list.length === 1 && paths.has("index.html")) return "single-html";
+  if (/type=["']text\/babel|react(?:\.production)?\.min\.js|ReactDOM\.|createRoot\(|<App\b|const\s*\{[^}]*useState/i.test(`${html}\n${js}`)) return "react";
+  return "three-files";
+}
+
+function editFormatRules(format: OutputFormat) {
+  const returnRule =
+    format === "single-html"
+      ? "Retorne somente o arquivo existente index.html, com CSS/JS inline preservados. NÃO crie styles.css nem script.js."
+      : format === "react"
+        ? "Retorne os arquivos no formato React atual: index.html shell + styles.css + script.js JSX/Babel. NÃO converta para HTML simples."
+        : "Retorne no formato atual de 3 arquivos: index.html, styles.css e script.js. NÃO converta para HTML único.";
+  return `FORMATO ATUAL OBRIGATÓRIO: ${format}\n${returnRule}\nMODO EDIÇÃO CIRÚRGICA: preserve estrutura, identidade visual, bibliotecas, arquivos, copy e comportamento existentes. Não refaça o site do zero. Altere somente o trecho pedido e dependências CSS/JS diretamente necessárias. Se um elemento selecionado foi informado, foque nele.`;
+}
+
 type ProjectKind =
   | "landing_page"
   | "portfolio"
@@ -1469,6 +1491,8 @@ export const sendChatMessage = createServerFn({ method: "POST" })
     const filesContext =
       (currentFiles ?? []).map((f) => `--- ${f.path} ---\n${f.content}`).join("\n\n") ||
       "(sem arquivos ainda)";
+    const currentFormat = detectCurrentOutputFormat((currentFiles ?? []) as GeneratedFile[]);
+    const editRules = currentFiles?.length ? editFormatRules(currentFormat) : "";
     const skillsContext = await loadActiveSkills(supabase, data.projectId);
     const currentTurn = {
       role: "user" as const,
@@ -1478,6 +1502,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
     logStage("context-ready", {
       historyCount: history?.length ?? 0,
       fileCount: currentFiles?.length ?? 0,
+      currentFormat,
       hasAttachments: Boolean(data.attachments?.length),
       hasPreviewSnapshot: Boolean(data.previewSnapshot),
     });
@@ -1513,7 +1538,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
             role: "system",
             content:
               SYSTEM_PROMPT +
-              `\n\nProjeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}${skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${skillsContext}` : ""}\n\nArquivos atuais:\n${filesContext}`,
+              `\n\n${editRules ? `${editRules}\n\n` : ""}Projeto: ${project.name} (${project.site_type})\nDescrição: ${project.description ?? "—"}${skillsContext ? `\n\nSKILLS ATIVAS DO PROJETO:\n${skillsContext}` : ""}\n\nArquivos atuais:\n${filesContext}`,
           },
           ...historyForModel.map((m) => ({
             role: m.role as "user" | "assistant",
