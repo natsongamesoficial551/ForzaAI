@@ -328,6 +328,7 @@ function Workspace() {
   const [previewPickMode, setPreviewPickMode] = useState(false);
   const [visualEditorOpen, setVisualEditorOpen] = useState(false);
   const [visualEdit, setVisualEdit] = useState<VisualEditValues>(emptyVisualEdit);
+  const [visualEditBaseline, setVisualEditBaseline] = useState<VisualEditValues>(emptyVisualEdit);
   const [manualSnapshots, setManualSnapshots] = useState<ChatAttachment[]>([]);
   const [readingAttachments, setReadingAttachments] = useState(false);
   const [capturingSnapshot, setCapturingSnapshot] = useState(false);
@@ -529,23 +530,21 @@ function Workspace() {
       if (!previewSelection || !files?.length) throw new Error("Selecione um elemento primeiro.");
       const selector = previewSelection.selector;
       const marker = encodeURIComponent(selector);
-      const cssValues: Record<string, string> = {
-        color: visualEdit.color,
-        "background-color": visualEdit.backgroundColor,
-        "font-size": visualEdit.fontSize,
-        "font-family": visualEdit.fontFamily,
-        "font-weight": visualEdit.fontWeight,
-        "text-align": visualEdit.textAlign,
-        width: visualEdit.width,
-        height: visualEdit.height,
-        padding: visualEdit.padding,
-        margin: visualEdit.margin,
-        "border-radius": visualEdit.borderRadius,
-        "border-width": visualEdit.borderWidth,
-        "border-style": visualEdit.borderWidth && visualEdit.borderWidth !== "0px" ? "solid" : "",
-        "border-color": visualEdit.borderColor,
-        opacity: visualEdit.opacity,
-      };
+      const propertyMap: Array<[keyof VisualEditValues, string]> = [
+        ["color", "color"], ["backgroundColor", "background-color"], ["fontSize", "font-size"],
+        ["fontFamily", "font-family"], ["fontWeight", "font-weight"], ["textAlign", "text-align"],
+        ["width", "width"], ["height", "height"], ["padding", "padding"], ["margin", "margin"],
+        ["borderRadius", "border-radius"], ["borderWidth", "border-width"], ["borderColor", "border-color"],
+        ["opacity", "opacity"],
+      ];
+      const cssValues: Record<string, string> = Object.fromEntries(
+        propertyMap
+          .filter(([key]) => visualEdit[key] !== visualEditBaseline[key])
+          .map(([key, property]) => [property, visualEdit[key]]),
+      );
+      if (visualEdit.borderWidth !== visualEditBaseline.borderWidth) {
+        cssValues["border-style"] = visualEdit.borderWidth && visualEdit.borderWidth !== "0px" ? "solid" : "none";
+      }
       const declarations = Object.entries(cssValues)
         .filter(([, value]) => value.trim())
         .map(([property, value]) => `  ${property}: ${value} !important;`)
@@ -555,8 +554,10 @@ function Workspace() {
         `/\\* forza-visual:${escapeRegExp(marker)} \\*/[\\s\\S]*?/\\* /forza-visual:${escapeRegExp(marker)} \\*/`,
       );
 
-      const shouldEditText = visualTextTags.has(previewSelection.tag);
-      const runtimeBlock = `/* forza-visual:${marker} */\n(function(){var attempts=0;function apply(){var el=document.querySelector(${JSON.stringify(selector)});if(!el){if(attempts++<50)setTimeout(apply,100);return;}${shouldEditText ? `el.textContent=${JSON.stringify(visualEdit.text)};` : ""}${previewSelection.tag === "img" ? `el.setAttribute('src',${JSON.stringify(visualEdit.imageSrc)});` : ""}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',apply);else apply();})();\n/* /forza-visual:${marker} */`;
+      const textChanged = visualTextTags.has(previewSelection.tag) && visualEdit.text !== visualEditBaseline.text;
+      const imageChanged = previewSelection.tag === "img" && visualEdit.imageSrc !== visualEditBaseline.imageSrc;
+      if (!declarations && !textChanged && !imageChanged) throw new Error("Nenhuma alteração visual para salvar.");
+      const runtimeBlock = `/* forza-visual:${marker} */\n(function(){var attempts=0;function apply(){var el=document.querySelector(${JSON.stringify(selector)});if(!el){if(attempts++<50)setTimeout(apply,100);return;}${textChanged ? `el.textContent=${JSON.stringify(visualEdit.text)};` : ""}${imageChanged ? `el.setAttribute('src',${JSON.stringify(visualEdit.imageSrc)});` : ""}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',apply);else apply();})();\n/* /forza-visual:${marker} */`;
       const runtimePattern = new RegExp(
         `/\\* forza-visual:${escapeRegExp(marker)} \\*/[\\s\\S]*?/\\* /forza-visual:${escapeRegExp(marker)} \\*/`,
       );
@@ -568,22 +569,24 @@ function Workspace() {
       const jsFile = files.find((file) => file.path === "script.js");
       const updates: Array<{ path: "index.html" | "styles.css" | "script.js"; content: string }> = [];
 
-      if (cssFile) {
+      if (cssFile && declarations) {
         updates.push({ path: "styles.css", content: replaceOrAppend(cssFile.content, cssPattern, cssBlock) });
       }
-      if ((shouldEditText || previewSelection.tag === "img") && jsFile) {
+      if ((textChanged || imageChanged) && jsFile) {
         updates.push({ path: "script.js", content: replaceOrAppend(jsFile.content, runtimePattern, runtimeBlock) });
       }
       if (htmlFile && !cssFile) {
         let content = htmlFile.content;
-        const styleTag = `<style data-forza-visual="${marker}">\n${cssBlock}\n</style>`;
-        const stylePattern = new RegExp(`<style data-forza-visual="${escapeRegExp(marker)}">[\\s\\S]*?<\\/style>`);
-        content = stylePattern.test(content)
-          ? content.replace(stylePattern, styleTag)
-          : /<\/head>/i.test(content)
-            ? content.replace(/<\/head>/i, `${styleTag}\n</head>`)
-            : `${styleTag}\n${content}`;
-        if ((shouldEditText || previewSelection.tag === "img") && !jsFile) {
+        if (declarations) {
+          const styleTag = `<style data-forza-visual="${marker}">\n${cssBlock}\n</style>`;
+          const stylePattern = new RegExp(`<style data-forza-visual="${escapeRegExp(marker)}">[\\s\\S]*?<\\/style>`);
+          content = stylePattern.test(content)
+            ? content.replace(stylePattern, styleTag)
+            : /<\/head>/i.test(content)
+              ? content.replace(/<\/head>/i, `${styleTag}\n</head>`)
+              : `${styleTag}\n${content}`;
+        }
+        if ((textChanged || imageChanged) && !jsFile) {
           const scriptTag = `<script data-forza-visual="${marker}">\n${runtimeBlock}\n<\/script>`;
           const scriptPattern = new RegExp(`<script data-forza-visual="${escapeRegExp(marker)}">[\\s\\S]*?<\\/script>`);
           content = scriptPattern.test(content)
@@ -593,7 +596,7 @@ function Workspace() {
               : `${content}\n${scriptTag}`;
         }
         updates.push({ path: "index.html", content });
-      } else if (htmlFile && (shouldEditText || previewSelection.tag === "img") && !jsFile) {
+      } else if (htmlFile && (textChanged || imageChanged) && !jsFile) {
         const scriptTag = `<script data-forza-visual="${marker}">\n${runtimeBlock}\n<\/script>`;
         const scriptPattern = new RegExp(`<script data-forza-visual="${escapeRegExp(marker)}">[\\s\\S]*?<\\/script>`);
         const content = scriptPattern.test(htmlFile.content)
@@ -812,7 +815,7 @@ function Workspace() {
       setPreviewSelection(data.selection);
       setPreviewPickMode(false);
       const styles = data.selection.styles ?? {};
-      setVisualEdit({
+      const nextVisualEdit: VisualEditValues = {
         ...emptyVisualEdit,
         text: data.selection.text ?? "",
         imageSrc: data.selection.tag === "img" ? (data.selection.html?.match(/\bsrc=["']([^"']*)/i)?.[1] ?? "") : "",
@@ -830,7 +833,9 @@ function Workspace() {
         borderWidth: styles.borderWidth || "",
         borderColor: styles.borderColor || "#000000",
         opacity: styles.opacity || "1",
-      });
+      };
+      setVisualEdit(nextVisualEdit);
+      setVisualEditBaseline(nextVisualEdit);
       if (!visualEditorOpen) {
         setInput((current) =>
           current.trim() ? current : `Edite o elemento selecionado (${data.selection.selector}): `,
@@ -853,33 +858,28 @@ function Workspace() {
 
   useEffect(() => {
     if (!visualEditorOpen || !previewSelection) return;
+    const changedStyles = Object.fromEntries(
+      ([
+        "color", "backgroundColor", "fontSize", "fontFamily", "fontWeight", "textAlign",
+        "width", "height", "padding", "margin", "borderRadius", "borderWidth", "borderColor", "opacity",
+      ] as const)
+        .filter((key) => visualEdit[key] !== visualEditBaseline[key])
+        .map((key) => [key, visualEdit[key]]),
+    );
+    if (visualEdit.borderWidth !== visualEditBaseline.borderWidth) {
+      changedStyles.borderStyle = visualEdit.borderWidth && visualEdit.borderWidth !== "0px" ? "solid" : "";
+    }
     previewFrameRef.current?.contentWindow?.postMessage(
       {
         type: "forza-visual-edit-preview",
         selector: previewSelection.selector,
-        text: visualTextTags.has(previewSelection.tag) ? visualEdit.text : undefined,
-        imageSrc: previewSelection.tag === "img" ? visualEdit.imageSrc : undefined,
-        styles: {
-          color: visualEdit.color,
-          backgroundColor: visualEdit.backgroundColor,
-          fontSize: visualEdit.fontSize,
-          fontFamily: visualEdit.fontFamily,
-          fontWeight: visualEdit.fontWeight,
-          textAlign: visualEdit.textAlign,
-          width: visualEdit.width,
-          height: visualEdit.height,
-          padding: visualEdit.padding,
-          margin: visualEdit.margin,
-          borderRadius: visualEdit.borderRadius,
-          borderWidth: visualEdit.borderWidth,
-          borderStyle: visualEdit.borderWidth && visualEdit.borderWidth !== "0px" ? "solid" : "",
-          borderColor: visualEdit.borderColor,
-          opacity: visualEdit.opacity,
-        },
+        text: visualTextTags.has(previewSelection.tag) && visualEdit.text !== visualEditBaseline.text ? visualEdit.text : undefined,
+        imageSrc: previewSelection.tag === "img" && visualEdit.imageSrc !== visualEditBaseline.imageSrc ? visualEdit.imageSrc : undefined,
+        styles: changedStyles,
       },
       "*",
     );
-  }, [previewSelection, visualEdit, visualEditorOpen]);
+  }, [previewSelection, visualEdit, visualEditBaseline, visualEditorOpen]);
 
   useEffect(() => {
     try {
