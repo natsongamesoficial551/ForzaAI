@@ -332,11 +332,11 @@ export type Database = {
         Returns: boolean;
       };
       get_user_plan: {
-        Args: { _env?: string; _user_id: string };
+        Args: { _env?: string; _user_id?: string };
         Returns: string;
       };
       has_active_subscription: {
-        Args: { _env?: string; _user_id: string };
+        Args: { _env?: string; _user_id?: string };
         Returns: boolean;
       };
       has_role: {
