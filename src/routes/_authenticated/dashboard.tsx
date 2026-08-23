@@ -93,18 +93,18 @@ function Dashboard() {
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
-      <div className="flex items-end justify-between gap-4">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto overflow-x-clip">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs text-primary mb-3">
             <MessageSquare className="size-3.5" /> Dashboard inteligente
           </div>
-          <h1 className="font-display text-3xl font-bold">Crie seu próximo projeto no chat</h1>
+          <h1 className="font-display text-2xl sm:text-3xl font-bold">Crie seu próximo projeto no chat</h1>
           <p className="text-muted-foreground mt-1">
             Descreva a ideia, responda o wizard e deixe a IA montar a primeira versão.
           </p>
         </div>
-        <Button className="bg-gradient-primary shadow-glow" onClick={() => setOpen(true)}>
+        <Button className="w-full sm:w-auto bg-gradient-primary shadow-glow" onClick={() => setOpen(true)}>
           Criar pelo chat
         </Button>
       </div>
@@ -121,12 +121,12 @@ function Dashboard() {
         </DialogContent>
       </Dialog>
 
-      <div className="mt-8 rounded-[2rem] border border-border bg-gradient-to-br from-card via-card to-primary/5 p-5 md:p-8 shadow-elegant">
+      <div className="mt-6 sm:mt-8 rounded-3xl sm:rounded-[2rem] border border-border bg-gradient-to-br from-card via-card to-primary/5 p-4 sm:p-5 md:p-8 shadow-elegant">
         <div className="mx-auto max-w-4xl text-center">
           <div className="inline-flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
             <Sparkles className="size-3.5 text-primary" /> ForzaAI Studio
           </div>
-          <h2 className="font-display text-3xl md:text-5xl font-semibold mt-3 tracking-tight">
+          <h2 className="font-display text-2xl sm:text-3xl md:text-5xl font-semibold mt-3 tracking-tight">
             O que você quer construir hoje?
           </h2>
           <p className="text-muted-foreground mt-3 max-w-2xl mx-auto">
@@ -135,7 +135,7 @@ function Dashboard() {
           </p>
         </div>
 
-        <div className="mt-8 mx-auto max-w-4xl relative rounded-3xl border border-border bg-background/80 focus-within:border-primary/60 focus-within:shadow-glow transition">
+        <div className="mt-6 sm:mt-8 mx-auto max-w-4xl relative rounded-2xl sm:rounded-3xl border border-border bg-background/80 focus-within:border-primary/60 focus-within:shadow-glow transition">
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -147,13 +147,13 @@ function Dashboard() {
             }}
             placeholder="Ex: Quero criar um SaaS para clínicas gerenciarem agendamentos, pagamentos e WhatsApp…"
             rows={5}
-            className="w-full resize-none bg-transparent px-5 py-5 pr-16 text-sm md:text-base outline-none placeholder:text-muted-foreground"
+            className="w-full resize-none bg-transparent px-4 sm:px-5 py-4 sm:py-5 pr-14 sm:pr-16 text-sm md:text-base outline-none placeholder:text-muted-foreground"
           />
           <Button
             size="icon"
             onClick={handleLaunchFromPrompt}
             disabled={launching || prompt.trim().length < 6}
-            className="absolute bottom-4 right-4 size-10 rounded-2xl bg-gradient-primary shadow-glow"
+            className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 size-10 rounded-2xl bg-gradient-primary shadow-glow"
           >
             <ArrowUp className="size-4" />
           </Button>
@@ -191,10 +191,10 @@ function Dashboard() {
         </div>
       </div>
 
-      <div className="mt-10">
-        <div className="mb-4 flex items-center justify-between gap-4">
+      <div className="mt-8 sm:mt-10">
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h2 className="font-display text-2xl font-semibold">Projetos recentes</h2>
+             <h2 className="font-display text-xl sm:text-2xl font-semibold">Projetos recentes</h2>
             <p className="text-sm text-muted-foreground">Continue editando ou publique seus sites.</p>
           </div>
         </div>

@@ -13,10 +13,10 @@ export const Route = createFileRoute("/")({
 
 function Landing() {
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-dvh bg-background overflow-x-clip">
       {/* nav */}
       <header className="border-b border-border/50 backdrop-blur-md sticky top-0 z-50 bg-background/80">
-        <div className="container mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="container mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
           <Link to="/" className="flex items-center gap-2">
             <div className="size-8 rounded-lg bg-gradient-primary shadow-glow grid place-items-center">
               <Sparkles className="size-4 text-primary-foreground" />
@@ -32,7 +32,7 @@ function Landing() {
             </a>
           </nav>
           <Link to="/login">
-            <Button variant="default" className="bg-gradient-primary shadow-glow hover:opacity-90">
+            <Button variant="default" className="bg-gradient-primary shadow-glow hover:opacity-90 px-4 sm:px-6">
               Entrar
             </Button>
           </Link>
@@ -40,30 +40,30 @@ function Landing() {
       </header>
 
       {/* hero */}
-      <section className="container mx-auto px-6 pt-24 pb-32 text-center relative">
+      <section className="container mx-auto px-4 sm:px-6 pt-14 sm:pt-20 md:pt-24 pb-16 sm:pb-24 md:pb-32 text-center relative">
         <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_center,_var(--primary)_0%,_transparent_50%)] opacity-10" />
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-card border border-border text-xs text-muted-foreground mb-8">
+        <div className="inline-flex max-w-full items-center gap-2 px-3 py-1 rounded-full bg-card border border-border text-[11px] sm:text-xs text-muted-foreground mb-6 sm:mb-8">
           <span className="size-1.5 rounded-full bg-primary animate-pulse" />
           Anti-alucinação · Deploy automático · 100 créditos grátis
         </div>
-        <h1 className="font-display font-bold text-5xl md:text-7xl tracking-tight max-w-4xl mx-auto leading-[1.05]">
+        <h1 className="font-display font-bold text-4xl sm:text-5xl md:text-7xl tracking-tight max-w-4xl mx-auto leading-[1.05]">
           Crie sites profissionais <span className="text-gradient">conversando com IA</span>
         </h1>
-        <p className="mt-6 text-lg text-muted-foreground max-w-2xl mx-auto">
+        <p className="mt-5 sm:mt-6 text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto">
           ForzaAI faz 20 a 40 perguntas certeiras antes de gerar uma linha de código — chega de IA
           inventando seus produtos, seu telefone, seu endereço. Você descreve, a gente publica.
         </p>
-        <div className="mt-10 flex flex-wrap gap-3 justify-center">
-          <Link to="/login">
+        <div className="mt-8 sm:mt-10 flex flex-col sm:flex-row flex-wrap gap-3 justify-center">
+          <Link to="/login" className="w-full sm:w-auto">
             <Button
               size="lg"
-              className="bg-gradient-primary shadow-glow hover:opacity-90 h-12 px-8 text-base"
+              className="w-full sm:w-auto bg-gradient-primary shadow-glow hover:opacity-90 h-12 px-8 text-base"
             >
               Começar grátis
             </Button>
           </Link>
-          <a href="#features">
-            <Button size="lg" variant="outline" className="h-12 px-8 text-base">
+          <a href="#features" className="w-full sm:w-auto">
+            <Button size="lg" variant="outline" className="w-full sm:w-auto h-12 px-8 text-base">
               Ver como funciona
             </Button>
           </a>
@@ -71,7 +71,7 @@ function Landing() {
       </section>
 
       {/* features */}
-      <section id="features" className="container mx-auto px-6 py-20">
+      <section id="features" className="container mx-auto px-4 sm:px-6 py-14 sm:py-20">
         <div className="grid md:grid-cols-3 gap-6">
           {[
             {
@@ -120,8 +120,8 @@ function Landing() {
       </section>
 
       {/* pricing */}
-      <section id="pricing" className="container mx-auto px-6 py-20">
-        <h2 className="font-display font-bold text-4xl text-center">Planos simples</h2>
+      <section id="pricing" className="container mx-auto px-4 sm:px-6 py-14 sm:py-20">
+        <h2 className="font-display font-bold text-3xl sm:text-4xl text-center">Planos simples</h2>
         <p className="text-center text-muted-foreground mt-2">
           Cancele quando quiser. Pague no Pix ou cartão.
         </p>
@@ -139,7 +139,7 @@ function Landing() {
           ].map((p) => (
             <div
               key={p.name}
-              className={`p-8 rounded-2xl border ${p.featured ? "border-primary bg-card shadow-glow" : "border-border bg-card"}`}
+              className={`p-6 sm:p-8 rounded-2xl border ${p.featured ? "border-primary bg-card shadow-glow" : "border-border bg-card"}`}
             >
               <h3 className="font-display text-2xl font-semibold">{p.name}</h3>
               <div className="mt-4 flex items-baseline gap-1">

@@ -84,7 +84,7 @@ function Admin() {
 
   if (authorized === false) {
     return (
-      <div className="p-8 max-w-md mx-auto text-center mt-20">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-md mx-auto text-center mt-12 sm:mt-20 overflow-x-clip">
         <div className="size-14 rounded-full bg-destructive/10 grid place-items-center mx-auto">
           <ShieldOff className="size-7 text-destructive" />
         </div>
@@ -99,7 +99,7 @@ function Admin() {
 
   if (authorized === null || isLoading) {
     return (
-      <div className="p-8 grid place-items-center min-h-[50vh]">
+      <div className="p-4 sm:p-6 lg:p-8 grid place-items-center min-h-[50vh] overflow-x-clip">
         <Loader2 className="size-6 animate-spin text-primary" />
       </div>
     );
@@ -107,7 +107,7 @@ function Admin() {
 
   if (error || !data) {
     return (
-      <div className="p-8 text-destructive">
+      <div className="p-4 sm:p-6 lg:p-8 text-destructive overflow-x-clip">
         Erro: {(error as Error)?.message ?? "desconhecido"}
       </div>
     );
@@ -116,7 +116,7 @@ function Admin() {
   const maxSignups = Math.max(1, ...data.series.map((s) => s.signups));
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto overflow-x-clip">
       <div className="flex items-center gap-3">
         <div className="size-10 rounded-lg bg-gradient-primary grid place-items-center shadow-glow">
           <Crown className="size-5 text-primary-foreground" />

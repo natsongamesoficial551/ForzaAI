@@ -12,7 +12,7 @@ export const Route = createFileRoute("/checkout/return")({
 function CheckoutReturn() {
   const { session_id } = Route.useSearch();
   return (
-    <div className="min-h-screen grid place-items-center p-6 bg-background">
+    <div className="min-h-dvh grid place-items-center p-4 sm:p-6 bg-background overflow-y-auto">
       <div className="max-w-md w-full text-center space-y-6 p-8 rounded-2xl border border-border bg-card">
         <div className="size-16 rounded-full bg-primary/10 grid place-items-center mx-auto">
           <CheckCircle2 className="size-8 text-primary" />

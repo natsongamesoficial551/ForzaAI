@@ -969,7 +969,7 @@ document.addEventListener('click', function(event) {
     : null;
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="h-[100dvh] min-h-[640px] md:h-screen md:min-h-0 flex flex-col overflow-hidden">
       <header className="h-14 border-b border-border px-2 sm:px-4 flex items-center gap-1.5 sm:gap-3 shrink-0 bg-card/50 overflow-x-auto">
         <Link to="/dashboard" className="shrink-0">
           <Button variant="ghost" size="sm">
@@ -1022,7 +1022,7 @@ document.addEventListener('click', function(event) {
 
       {/* Mobile: painéis empilhados (chat em cima, preview embaixo). A barra
           de redimensionamento horizontal fica inválida no modo vertical. */}
-      <ResizablePanelGroup direction={isMobile ? "vertical" : "horizontal"} className="flex-1">
+      <ResizablePanelGroup direction={isMobile ? "vertical" : "horizontal"} className="flex-1 min-h-0">
         <ResizablePanel defaultSize={isMobile ? 45 : 32} minSize={isMobile ? 25 : 22}>
           <div className="h-full flex flex-col bg-card/30">
             <div className="px-4 py-3 border-b border-border text-sm font-semibold flex items-center justify-between gap-2">

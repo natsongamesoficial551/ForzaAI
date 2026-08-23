@@ -145,7 +145,7 @@ function Connectors() {
   };
 
   return (
-    <div className="p-8 max-w-6xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto overflow-x-clip">
       <div className="mb-8">
         <h1 className="font-display text-3xl font-bold">Conectores</h1>
         <p className="text-muted-foreground mt-1">

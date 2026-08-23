@@ -97,14 +97,44 @@
 
 @layer base {
   * { border-color: var(--color-border); }
+  html {
+    min-height: 100%;
+    scroll-behavior: smooth;
+    overflow-x: clip;
+  }
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
     font-feature-settings: "ss01", "cv11";
+    min-height: 100dvh;
+    overflow-x: clip;
+    -webkit-overflow-scrolling: touch;
+  }
+  #root, #__next {
+    min-height: 100dvh;
+  }
+  img, video, canvas, svg, iframe {
+    max-width: 100%;
+  }
+  button, a, input, textarea, select {
+    touch-action: manipulation;
   }
   h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.02em; }
   code, pre, .font-mono { font-family: var(--font-mono); }
+}
+
+@media (max-width: 767px) {
+  [data-radix-popper-content-wrapper] {
+    max-width: calc(100vw - 1rem) !important;
+  }
+
+  [role="dialog"] {
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100dvh - 1rem);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 @layer utilities {

@@ -90,12 +90,12 @@ function AuthLayout() {
   const isWorkspace = pathname.includes("/projects/") && pathname.split("/").length > 3;
 
   return (
-    <div className="min-h-screen flex bg-background">
+    <div className="min-h-dvh flex flex-col md:flex-row bg-background overflow-x-clip">
       {/* sidebar */}
-      <aside className="w-60 border-r border-border bg-sidebar flex flex-col shrink-0">
+      <aside className="w-full md:w-60 md:min-h-dvh border-b md:border-b-0 md:border-r border-border bg-sidebar flex flex-col shrink-0">
         <Link
           to="/dashboard"
-          className="h-16 flex items-center gap-2 px-5 border-b border-sidebar-border"
+          className="h-14 md:h-16 flex items-center gap-2 px-4 md:px-5 border-b border-sidebar-border shrink-0"
         >
           <div className="size-8 rounded-lg bg-gradient-primary shadow-glow grid place-items-center">
             <Sparkles className="size-4 text-primary-foreground" />
@@ -106,7 +106,7 @@ function AuthLayout() {
           </div>
         </Link>
 
-        <nav className="flex-1 p-3 space-y-1">
+        <nav className="flex md:flex-1 gap-1 md:block p-2 md:p-3 md:space-y-1 overflow-x-auto md:overflow-x-visible overscroll-x-contain">
           {nav.map((item) => {
             const active =
               pathname === item.to || (item.to !== "/dashboard" && pathname.startsWith(item.to));
@@ -128,7 +128,7 @@ function AuthLayout() {
           })}
         </nav>
 
-        <div className="p-3 border-t border-sidebar-border">
+        <div className="hidden md:block p-3 border-t border-sidebar-border">
           <div className="px-3 py-2 rounded-md bg-card flex items-center gap-2 mb-2">
             <Zap className="size-4 text-accent" />
             <span className="text-sm font-medium">{profile?.credits ?? "—"}</span>
@@ -154,7 +154,7 @@ function AuthLayout() {
       </aside>
 
       {/* main */}
-      <main className={cn("flex-1 min-w-0", isWorkspace ? "" : "overflow-auto")}>
+      <main className={cn("flex-1 min-w-0 min-h-0", isWorkspace ? "" : "overflow-y-auto overflow-x-clip")}>
         <Outlet />
       </main>
     </div>

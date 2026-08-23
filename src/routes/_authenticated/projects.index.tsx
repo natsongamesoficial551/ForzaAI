@@ -44,33 +44,33 @@ function Projects() {
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
-      <div className="flex items-end justify-between gap-4">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto overflow-x-clip">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl font-bold">Projetos</h1>
+          <h1 className="font-display text-2xl sm:text-3xl font-bold">Projetos</h1>
           <p className="text-muted-foreground mt-1">
             Veja seus projetos e crie um workspace novo para conversar com a IA.
           </p>
         </div>
-        <Button onClick={handleCreateProject} disabled={launching} className="bg-gradient-primary shadow-glow">
+        <Button onClick={handleCreateProject} disabled={launching} className="w-full sm:w-auto bg-gradient-primary shadow-glow">
           {launching ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
           Criar projeto
         </Button>
       </div>
 
-      <div className="mt-8 rounded-[2rem] border border-border bg-gradient-to-br from-card via-card to-primary/5 p-6 md:p-8 shadow-elegant flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+      <div className="mt-6 sm:mt-8 rounded-3xl sm:rounded-[2rem] border border-border bg-gradient-to-br from-card via-card to-primary/5 p-4 sm:p-6 md:p-8 shadow-elegant flex flex-col md:flex-row md:items-center md:justify-between gap-5">
         <div className="max-w-3xl">
           <div className="inline-flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
             <Sparkles className="size-3.5 text-primary" /> Novo workspace
           </div>
-          <h2 className="font-display text-2xl md:text-4xl font-semibold mt-3 tracking-tight">
+          <h2 className="font-display text-xl sm:text-2xl md:text-4xl font-semibold mt-3 tracking-tight">
             Comece um projeto limpo
           </h2>
           <p className="text-sm text-muted-foreground mt-2">
             Crie o projeto agora e descreva o que quer construir no chat com preview, código e Build.
           </p>
         </div>
-        <Button size="lg" onClick={handleCreateProject} disabled={launching} className="bg-gradient-primary shadow-glow shrink-0">
+        <Button size="lg" onClick={handleCreateProject} disabled={launching} className="w-full md:w-auto bg-gradient-primary shadow-glow shrink-0">
           {launching ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
           Criar projeto
         </Button>
@@ -124,7 +124,7 @@ function Projects() {
             ))}
           </div>
         ) : (
-          <div className="rounded-xl border border-dashed border-border bg-card/50 p-12 text-center">
+          <div className="rounded-xl border border-dashed border-border bg-card/50 p-8 sm:p-12 text-center">
             <div className="size-12 rounded-full bg-primary/10 grid place-items-center mx-auto">
               <Sparkles className="size-6 text-primary" />
             </div>

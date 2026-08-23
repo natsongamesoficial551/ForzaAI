@@ -37,18 +37,18 @@ function Login() {
   };
 
   return (
-    <div className="min-h-screen grid place-items-center px-6 relative overflow-hidden">
+    <div className="min-h-dvh grid place-items-center px-4 sm:px-6 py-8 relative overflow-x-hidden overflow-y-auto">
       <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_var(--primary)_0%,_transparent_50%)] opacity-15" />
 
       <div className="w-full max-w-md">
-        <Link to="/" className="flex items-center gap-2 justify-center mb-10">
+        <Link to="/" className="flex items-center gap-2 justify-center mb-8 sm:mb-10">
           <div className="size-10 rounded-lg bg-gradient-primary shadow-glow grid place-items-center">
             <Sparkles className="size-5 text-primary-foreground" />
           </div>
           <span className="font-display font-bold text-2xl">ForzaAI</span>
         </Link>
 
-        <div className="rounded-2xl border border-border bg-card p-8 shadow-elegant">
+        <div className="rounded-2xl border border-border bg-card p-5 sm:p-8 shadow-elegant">
           <h1 className="font-display text-2xl font-semibold text-center">Bem-vindo</h1>
           <p className="text-center text-sm text-muted-foreground mt-2">
             Entre com Google para começar a criar
