@@ -1174,6 +1174,19 @@ function Workspace() {
     ? `${typeof window !== "undefined" ? window.location.origin : ""}/s/${project.slug}`
     : null;
 
+  const openPreviewInNewTab = () => {
+    if (!hasFiles) return toast.error("Gere o site antes de abrir em nova aba.");
+    const blob = new Blob([previewDoc], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      URL.revokeObjectURL(url);
+      toast.error("O navegador bloqueou a nova aba. Permita pop-ups para abrir o site.");
+      return;
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+
   return (
     <div className="h-[100dvh] min-h-[640px] md:h-screen md:min-h-0 flex flex-col overflow-hidden">
       <header className="h-14 border-b border-border px-2 sm:px-4 flex items-center gap-1.5 sm:gap-3 shrink-0 bg-card/50 overflow-x-auto">
@@ -1637,6 +1650,16 @@ function Workspace() {
                   title="Recarregar"
                 >
                   <RefreshCw className="size-3.5" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={openPreviewInNewTab}
+                  disabled={!hasFiles}
+                  title="Abrir o site gerado em uma nova aba"
+                >
+                  <ExternalLink className="size-3.5" />
+                  <span className="hidden sm:inline">Abrir site</span>
                 </Button>
                 <Button
                   size="sm"
